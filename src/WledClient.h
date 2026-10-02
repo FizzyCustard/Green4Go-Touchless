@@ -25,10 +25,10 @@ private:
   unsigned long _backoffUntil; // Skip calls until this millis() after a failure
   bool _inBackoff;
 
-  bool ready(const char *what);
+  bool ready(const char *what, bool ignoreBackoff = false);
   bool buildUrl(String &url);
   void noteResult(int httpCode);
-  void sendRequest(String &jsonPayload);
+  int sendRequest(String &jsonPayload, bool ignoreBackoff = false);
 };
 
 #endif

@@ -61,6 +61,17 @@ Verification: there's no hardware in the review environment, so the firmware was
 | 31 | WLED calls used the default 5s connect timeout and sat in the same queue as bus fetches | With WLED unplugged, opening Bus Times waited **10s+ for "Loading..."** | 1s LAN timeout plus 30s backoff after a failure |
 | 32 | Connect timeout not set for TfL (only read timeout) | Up to 5s connect waits | Explicit connect timeout |
 
+### Found by the independent code review (second pass)
+
+| # | Bug | Effect | Fix |
+|---|-----|--------|-----|
+| 33 | The "Hold" label on the unlock ring painted a full-width band over the grey track | Two gaps in the ring at 3 and 9 o'clock | Label drawn before the ring |
+| 34 | Cancelling an unlock did a full-screen clear and redraw | Hovering around 3-5cm made standby flash repeatedly | Only the ring is erased; the standby text repaints in place |
+| 35 | WLED restore was skipped during the 30s failure backoff and the saved state thrown away | One network blip mid-effect left the lights **stuck on the bus colour** | Restore always tries and keeps the saved state until it succeeds; a re-save won't overwrite an unrestored original |
+| 36 | A stalled or cut-off TfL response was reported as "No buses" (a success) | Wiped good countdown data and slowed retries to 60s | Body reader detects a clean end vs a stall; incomplete responses are errors. Also ends instantly at end-of-body (was a 1s busy-spin per fetch) |
+| 37 | TLS handshake timeout was the library default of 120s | A stalled handshake blocked every queued WLED command (including restores) for 2 minutes | 10s (`TLS_HANDSHAKE_TIMEOUT_S`) |
+| 38 | A hand resting near a zone boundary could drift half a centimetre, change row and re-arm | Possible screen ping-pong (e.g. Lights -> Back -> Lights) without the user moving | Re-arming needs the hand to leave, or move >2cm (`REARM_DISTANCE_CM`) to a different row. Hysteresis carries across screen changes |
+
 ### Code health
 
 - `DisplayManager` destructor deleted `Arduino_DataBus` through a non-virtual destructor (undefined behaviour, compiler warning). Removed: the object lives for the whole run.
@@ -144,5 +155,6 @@ Verification: there's no hardware in the review environment, so the firmware was
 ## Verification notes
 
 - **Compile + link:** all sources compile with `-Wall -Wextra` and zero warnings against Arduino-ESP32 2.0.17 / GFX 1.4.9, and the firmware links (flash ~830KB). PlatformIO's registry was blocked in the review environment, so this used an equivalent Arduino-core toolchain rather than `pio run`. Run `pio run` locally to confirm.
-- **Behaviour:** a host-side simulation compiled the real `StateManager.cpp` against stubs and ran scripted hand-movement scenarios (unlock-then-hold, bus screen bounce, lights back-out, API error restore, timer menu arming, standby timeout, hysteresis jitter, countdown, refresh cadence, fast sweeps, echo dropouts). 55 checks, all passing.
+- **Behaviour:** a host-side simulation compiled the real `StateManager.cpp` against stubs and ran scripted hand-movement scenarios (unlock-then-hold, bus screen bounce, lights back-out, API error restore, timer menu arming, standby timeout, hysteresis jitter, countdown, refresh cadence, fast sweeps, echo dropouts, boundary drift). 63 checks, all passing.
+- **Code review:** an independent adversarial review checked the display maths, state machine, networking and cross-core locking against the GFX and Arduino-ESP32 sources. Its six findings are fixed (#33-38).
 - **Not verified:** anything visual on the real panel (animation smoothness, colours, text placement) and real sensor/network behaviour. Worth a 10-minute hands-on pass.

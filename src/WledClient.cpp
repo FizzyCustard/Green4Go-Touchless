@@ -15,12 +15,12 @@ void WledClient::begin() {
 // WLED lives on the LAN, so a failed call means it's off or unplugged. Back
 // off for a while rather than making every request wait out a timeout, which
 // would also delay any bus fetch queued behind it.
-bool WledClient::ready(const char *what) {
+bool WledClient::ready(const char *what, bool ignoreBackoff) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.printf("[WLED] %s skipped: WiFi not connected\n", what);
     return false;
   }
-  if (_inBackoff && (long)(millis() - _backoffUntil) < 0) {
+  if (!ignoreBackoff && _inBackoff && (long)(millis() - _backoffUntil) < 0) {
     Serial.printf("[WLED] %s skipped: WLED unreachable, backing off\n", what);
     return false;
   }
@@ -45,10 +45,11 @@ bool WledClient::buildUrl(String &url) {
   return url.length() <= MAX_URL_LENGTH;
 }
 
-void WledClient::sendRequest(String &jsonPayload) {
+// Returns the HTTP code, or 0 if the request was skipped
+int WledClient::sendRequest(String &jsonPayload, bool ignoreBackoff) {
   String url;
-  if (!ready("Send") || !buildUrl(url))
-    return;
+  if (!ready("Send", ignoreBackoff) || !buildUrl(url))
+    return 0;
 
   Serial.printf("[WLED] Sending to %s: %s\n", url.c_str(), jsonPayload.c_str());
 
@@ -69,6 +70,7 @@ void WledClient::sendRequest(String &jsonPayload) {
   }
 
   http.end();
+  return httpCode;
 }
 
 // WLED JSON Presets
@@ -129,7 +131,12 @@ void WledClient::updateForBusTime(int minutes) {
 }
 
 void WledClient::saveState() {
-  _hasSavedState = false;
+  if (_hasSavedState) {
+    // A previous restore failed; the state we hold is the user's real one,
+    // whereas the strip is probably still showing the bus colour
+    Serial.println("[WLED] Keeping earlier unrestored state");
+    return;
+  }
   String url;
   if (!ready("Save") || !buildUrl(url))
     return;
@@ -156,7 +163,10 @@ void WledClient::restoreState() {
   if (!_hasSavedState || _savedState.length() == 0)
     return;
 
+  // Always try the restore, even during backoff: one blip mid-effect must
+  // not leave the lights stuck on the bus colour. Keep the saved state if it
+  // fails so a later restore can still put things back.
   Serial.println("[WLED] Restoring State...");
-  sendRequest(_savedState);
-  _hasSavedState = false; // Reset after restore
+  if (sendRequest(_savedState, true) > 0)
+    _hasSavedState = false;
 }

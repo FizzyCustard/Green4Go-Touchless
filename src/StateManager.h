@@ -42,6 +42,7 @@ private:
   unsigned long _zoneStartTime;
   bool _armed;                 // Cleared by a selection until the hand moves
   int _rearmRow;               // Row the hand was on when disarmed
+  float _disarmDist;           // Hand distance when disarmed
 
   // Standby & Power Logic
   unsigned long _lastInteractionTime;

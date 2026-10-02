@@ -1,5 +1,6 @@
 #include "StateManager.h"
 #include <WiFi.h>
+#include <math.h>
 
 #define ROW_NONE -1
 #define ROW_UNSET -2 // Disarmed, waiting for the first reading on a screen
@@ -36,6 +37,7 @@ StateManager::StateManager(DistanceSensor *sensor, DisplayManager *display) {
   _zoneStartTime = 0;
   _armed = false;
   _rearmRow = ROW_UNSET;
+  _disarmDist = 0;
 
   _lastInteractionTime = millis();
   _busEffectStartTime = 0;
@@ -84,8 +86,9 @@ void StateManager::goToState(AppState s) {
 
   // The hand is probably still where it was when it triggered this change,
   // so it must move before anything on the new screen can be selected
+  // _rawZone is kept: every screen shares the same zone geometry, so the
+  // hysteresis that held the hand in its row should carry over too
   disarm();
-  _rawZone = ROW_NONE;
   _lastZoneIdx = ROW_NONE;
   resetStandbyTimer();
 
@@ -98,6 +101,7 @@ void StateManager::goToState(AppState s) {
 void StateManager::disarm() {
   _armed = false;
   _rearmRow = ROW_UNSET;
+  _disarmDist = _sensor ? _sensor->getSmoothedDistance() : 0;
 }
 
 void StateManager::resetStandbyTimer() { _lastInteractionTime = millis(); }
@@ -260,11 +264,15 @@ void StateManager::updateInteractive(float dist) {
   if (dist < BASE_ACTIVE_MAX_DISTANCE)
     resetStandbyTimer();
 
-  // Re-arm once the hand moves to a different row (or away)
+  // Re-arm once the hand leaves, or genuinely moves to a different row.
+  // The distance check stops a hand resting near a boundary from drifting
+  // across it and re-arming without the user meaning to move.
   if (!_armed) {
     if (_rearmRow == ROW_UNSET)
       _rearmRow = row;
-    else if (row != _rearmRow)
+    else if (row == ROW_NONE && _rearmRow != ROW_NONE)
+      _armed = true;
+    else if (row != _rearmRow && fabsf(dist - _disarmDist) > REARM_DISTANCE_CM)
       _armed = true;
   }
 
