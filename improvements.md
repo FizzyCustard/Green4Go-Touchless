@@ -98,6 +98,46 @@ Verification: there's no hardware in the review environment, so the firmware was
 
 ---
 
+## Features built (round 2)
+
+**Hand-position cursor.** A white marker rides a rail down the right-hand edge of every menu screen, showing exactly where your hand maps: the three rows for 0-15cm, the base strip for 15-25cm. It glides at 60fps between sensor readings rather than jumping. Menu content now paints to the left of an 8px gutter so nothing overwrites the rail.
+
+**Next two buses.** Standby shows "then 11 min" under the main time. The Bus screen shows "36, then 11m". Both count down locally like the first bus.
+
+**Leave now alert.** When either of the next two buses is more than 5 minutes but no more than 6 minutes away, the strip does a fast green breathe and standby shows **LEAVE NOW** in green with that bus's time. If the first bus is already uncatchable, it alerts for the second. Active **Mon-Fri 07:00-09:30** (UK time, BST handled via NTP). Change it in `Config.h`:
+
+```cpp
+#define WALK_TIME_MIN 5
+#define LEAVE_LATEST_MIN 6
+#define LEAVE_ALERT_DAYS 0b0111110 // bit 0 = Sunday ... bit 6 = Saturday
+#define LEAVE_ALERT_START_HHMM 700
+#define LEAVE_ALERT_END_HHMM 930
+```
+
+Details:
+- During alert hours, standby refreshes every 20s (instead of 60s) once a bus is within 10 minutes, so the 1-minute window is caught accurately.
+- The alert outranks the Bus Times light effect. Opening Bus Times during an alert leaves the green pulse alone. Only one save/restore of your lighting happens however the two overlap.
+- An alert also wakes a sleeping screen.
+
+**Display sleep.** After 15 minutes in standby with no hand within 25cm, the backlight fades out over 400ms. A hand within 25cm fades it back in. Unlocking works straight from sleep. Backlight is now PWM-driven (needed for the fade). Tunable via `DISPLAY_SLEEP_MS`.
+
+**OTA updates.** Upload new firmware over WiFi with a progress bar on screen.
+
+First-time setup:
+1. Add to your `src/secrets.h`: `#define OTA_PASSWORD "something-only-you-know"` (without it, OTA stays disabled).
+2. Flash once over USB as normal (`pio run -t upload`).
+3. From then on, on the same network:
+   ```bash
+   export GREEN4GO_OTA_PASSWORD=something-only-you-know
+   pio run -e esp32s3_ota -t upload
+   ```
+
+The device is `green4go.local` (mDNS). If your network blocks mDNS, set `upload_port` in `platformio.ini` to the device's IP (printed on serial at boot). Firmware is ~970KB against a 1.25MB OTA slot, so there's room, but keep an eye on it as features grow.
+
+Hardware note on the backlight: it now uses PWM on GPIO1 instead of a plain HIGH. That's standard for this panel, but if the screen stays dark after flashing, tell me and I'll revert that line.
+
+---
+
 ## Questions for Naji
 
 **Q1. Unlock distance (3cm) is in the HC-SR04's blind spot.** The sensor's minimum range is about 2cm, and closer than that it often misses the echo entirely, which reads as "far". That leaves roughly a 1cm window to unlock in, which will feel finicky. I'd suggest 5cm (`UNLOCK_DISTANCE_CM`). Left at 3 for you to decide.
@@ -120,22 +160,24 @@ Verification: there's no hardware in the review environment, so the firmware was
 
 ---
 
-## Feature ideas (for review, not built)
+## Feature ideas (for review)
+
+Built: 1, 5, 6, 14, 16 (see above). Parked for later: 9 (countdown presets).
 
 **Interaction**
-1. **Hand-position cursor:** a thin marker down the right edge showing where your hand maps, so you can find rows without guessing. Cheap, and probably the biggest learnability win for a touchless UI.
+1. ~~**Hand-position cursor**~~ (built)
 2. **Swipe gesture for Back:** a fast hand withdrawal (big distance jump in ~200ms) as a universal "back", freeing a row on every screen.
 3. **Adaptive dwell:** shorter dwell (600ms) for rows the user picks often, longer for "destructive" ones like Reset.
 4. **Proximity wake preview:** as a hand approaches in standby (15-30cm), brighten the screen or show "closer..." before the unlock ring starts.
 
 **Bus**
-5. **Next two buses:** "4 min, then 11 min". Very useful when you'll just miss the first one.
-6. **"Leave now" alert:** WLED pulses green at the ideal leave-the-house moment (configurable walk time to the stop).
+5. ~~**Next two buses**~~ (built)
+6. ~~**"Leave now" alert**~~ (built)
 7. **Multiple stops / directions:** a row on the Bus screen to toggle between stops.
 8. **Disruption status:** TfL Line Status API, showing a small warning icon when the route has delays.
 
 **Timer**
-9. **Countdown presets:** 4 min (French press), 30s (espresso bloom) with a WLED flash and screen pulse at zero. Fits "Coffee Zone" better than a stopwatch.
+9. **Countdown presets** (parked): 4 min (French press), 30s (espresso bloom) with a WLED flash and screen pulse at zero. Fits "Coffee Zone" better than a stopwatch.
 10. **Timer survives standby:** shows on the standby screen and resumes when re-entered (see Q2).
 
 **Lights**
@@ -144,9 +186,9 @@ Verification: there's no hardware in the review environment, so the firmware was
 13. **Auto night mode:** dim the display backlight (PWM on TFT_BL) and WLED after a set hour.
 
 **Device**
-14. **Display sleep:** turn the backlight off after N minutes of standby, wake on approach. Saves the panel and power.
+14. ~~**Display sleep**~~ (built)
 15. **WiFi setup portal:** WiFiManager captive portal so credentials aren't compiled in.
-16. **OTA updates:** ArduinoOTA so it can be reflashed without USB.
+16. ~~**OTA updates**~~ (built)
 17. **Use the onboard IMU:** a knock/tap to wake, or detect the unit being moved and pause input.
 18. **Status page:** tiny web page on the device showing sensor readings, last fetch, WiFi RSSI. Makes tuning distances much easier.
 

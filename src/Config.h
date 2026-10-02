@@ -94,6 +94,30 @@
 #define MAX_DISTANCE_CM 400.0           // Max valid sensor distance
 #define MAX_ESP32_PIN 48                // Max valid ESP32 pin number
 
+// --- Leave Now Alert ---
+// Pulses the lights green when a bus is in the window where leaving now
+// still catches it: more than WALK_TIME_MIN away, and no more than
+// LEAVE_LATEST_MIN away. Only active during the hours below (local time).
+#define WALK_TIME_MIN 5
+#define LEAVE_LATEST_MIN 6
+#define LEAVE_ALERT_DAYS 0b0111110 // Bit per weekday, bit 0 = Sunday (Mon-Fri)
+#define LEAVE_ALERT_START_HHMM 700 // 07:00
+#define LEAVE_ALERT_END_HHMM 930   // 09:30
+#define LEAVE_REFRESH_MS 20000     // Refresh this often when a bus is getting close
+#define TIMEZONE "GMT0BST,M3.5.0/1,M10.5.0" // UK time incl. BST
+#define NTP_SERVER_1 "pool.ntp.org"
+#define NTP_SERVER_2 "time.google.com"
+
+// --- Display Sleep ---
+#define DISPLAY_SLEEP_MS 900000UL  // Backlight off after 15 min idle in standby
+#define BACKLIGHT_FADE_MS 400      // Fade time for sleep/wake
+
+// --- OTA Updates ---
+// Set OTA_PASSWORD in secrets.h to enable over-the-air updates
+#ifndef OTA_HOSTNAME
+#define OTA_HOSTNAME "green4go" // Reachable as green4go.local
+#endif
+
 // --- Debug ---
 #define DEBUG_SENSOR 0 // 1 = print raw/smoothed distance every tick
 

@@ -130,6 +130,14 @@ void WledClient::updateForBusTime(int minutes) {
   sendRequest(json);
 }
 
+void WledClient::setLeaveNow() {
+  // Fast green breathe: "go now"
+  String json = "{\"seg\":[{\"fx\":2,\"sx\":220,\"ix\":128,\"col\":[[0,255,0]]}"
+                "],\"on\":true}";
+  Serial.println("[WLED] Leave now!");
+  sendRequest(json);
+}
+
 void WledClient::saveState() {
   if (_hasSavedState) {
     // A previous restore failed; the state we hold is the user's real one,
