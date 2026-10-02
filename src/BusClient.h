@@ -11,15 +11,15 @@ public:
   BusClient();
   void begin();
 
-  // Returns time to next bus in minutes, or -1 if error/no bus
-  int getNextBusTime();
+  // Returns seconds until the next matching bus, or a negative BUS_* status
+  // code. The route of that bus is copied into lineOut.
+  int getNextBusSeconds(char *lineOut, size_t lineLen);
 
 private:
   WiFiClientSecure _secureClient;
 
-  // Stream parser helper
-  // Returns minutes to arrival
-  int parseNextArrival(Stream &stream);
+  int parseNextArrival(Stream &stream, char *lineOut, size_t lineLen);
+  static bool lineMatchesFilter(const String &lineName);
 };
 
 #endif

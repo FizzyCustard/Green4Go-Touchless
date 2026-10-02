@@ -22,6 +22,12 @@ private:
   WiFiClient _client;
   String _savedState;
   bool _hasSavedState;
+  unsigned long _backoffUntil; // Skip calls until this millis() after a failure
+  bool _inBackoff;
+
+  bool ready(const char *what);
+  bool buildUrl(String &url);
+  void noteResult(int httpCode);
   void sendRequest(String &jsonPayload);
 };
 

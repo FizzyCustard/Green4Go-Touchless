@@ -1,6 +1,7 @@
 #ifndef NETWORK_MANAGER_H
 #define NETWORK_MANAGER_H
 
+#include "Config.h"
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -29,7 +30,8 @@ public:
   NetworkManager(BusClient *busClient, WledClient *wledClient);
   void begin();
 
-  // Queue requests (Non-blocking)
+  // Queue requests (Non-blocking). A bus fetch is skipped if one is already
+  // queued or running.
   void requestBusUpdate();
   void requestWledRainbow();
   void requestWledCoffee();
@@ -38,20 +40,28 @@ public:
   void requestWledSaveState();
   void requestWledRestoreState();
 
-  // Retrieve results
-  bool isBusDataReady();
-  int getLatestBusMinutes();
-  void clearBusDataReady();
+  // Retrieve results. Returns true (once) when a new fetch has finished.
+  // seconds is time to the next bus or a negative BUS_* code; completedAt is
+  // the millis() when the result came back.
+  bool takeBusResult(int &seconds, unsigned long &completedAt, char *line,
+                     size_t lineLen);
+  bool isBusFetchPending();
 
 private:
   BusClient *_busClient;
   WledClient *_wledClient;
 
   QueueHandle_t _cmdQueue;
+  portMUX_TYPE _lock = portMUX_INITIALIZER_UNLOCKED;
 
-  volatile bool _busDataReady;
-  volatile int _latestBusMinutes;
+  // Guarded by _lock (written on core 0, read on core 1)
+  bool _busDataReady;
+  bool _busFetchPending;
+  int _latestBusSeconds;
+  unsigned long _latestBusAt;
+  char _latestLine[MAX_LINE_NAME_LENGTH + 1];
 
+  void enqueue(NetworkAction action, int param = 0);
   static void networkTask(void *parameter);
 };
 
