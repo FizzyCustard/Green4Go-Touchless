@@ -118,6 +118,7 @@ Details:
 - During alert hours, standby refreshes every 20s (instead of 60s) once a bus is within 10 minutes, so the 1-minute window is caught accurately.
 - The alert outranks the Bus Times light effect. Opening Bus Times during an alert leaves the green pulse alone. Only one save/restore of your lighting happens however the two overlap.
 - An alert also wakes a sleeping screen.
+- Picking Rainbow or Coffee during an alert wins: your choice stays and the alert won't "restore" over it when it ends.
 
 **Display sleep.** After 15 minutes in standby with no hand within 25cm, the backlight fades out over 400ms. A hand within 25cm fades it back in. Unlocking works straight from sleep. Backlight is now PWM-driven (needed for the fade). Tunable via `DISPLAY_SLEEP_MS`.
 
@@ -197,6 +198,6 @@ Built: 1, 5, 6, 14, 16 (see above). Parked for later: 9 (countdown presets).
 ## Verification notes
 
 - **Compile + link:** all sources compile with `-Wall -Wextra` and zero warnings against Arduino-ESP32 2.0.17 / GFX 1.4.9, and the firmware links (flash ~830KB). PlatformIO's registry was blocked in the review environment, so this used an equivalent Arduino-core toolchain rather than `pio run`. Run `pio run` locally to confirm.
-- **Behaviour:** a host-side simulation compiled the real `StateManager.cpp` against stubs and ran scripted hand-movement scenarios (unlock-then-hold, bus screen bounce, lights back-out, API error restore, timer menu arming, standby timeout, hysteresis jitter, countdown, refresh cadence, fast sweeps, echo dropouts, boundary drift). 63 checks, all passing.
+- **Behaviour:** a host-side simulation compiled the real `StateManager.cpp` against stubs and ran scripted hand-movement scenarios (unlock-then-hold, bus screen bounce, lights back-out, API error restore, timer menu arming, standby timeout, hysteresis jitter, countdown, refresh cadence, fast sweeps, echo dropouts, boundary drift, plus the round-2 features: leave-now window edges, alert hours incl. weekends and unsynced clock, alert vs Bus screen light ownership, display sleep/wake, cursor calls). 98 checks, all passing. BST itself isn't exercised (the sim runs in UTC).
 - **Code review:** an independent adversarial review checked the display maths, state machine, networking and cross-core locking against the GFX and Arduino-ESP32 sources. Its six findings are fixed (#33-38).
 - **Not verified:** anything visual on the real panel (animation smoothness, colours, text placement) and real sensor/network behaviour. Worth a 10-minute hands-on pass.

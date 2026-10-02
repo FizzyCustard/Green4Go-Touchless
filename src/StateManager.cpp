@@ -369,10 +369,12 @@ void StateManager::actionTimer(int row) {
 
 void StateManager::actionLights(int row) {
   if (row == 0) { // Rainbow
+    takeBackLights();
     _networkManager->requestWledRainbow();
     goToState(SHOWING_SUCCESS);
     _display->drawSuccessScreen("Rainbow!");
   } else if (row == 1) { // Solid (Now Coffee)
+    takeBackLights();
     _networkManager->requestWledCoffee();
     goToState(SHOWING_SUCCESS);
     _display->drawSuccessScreen("Coffee");
@@ -505,6 +507,15 @@ void StateManager::endBusEffect() {
   if (_wledOwner != WLED_BUS)
     return;
   _networkManager->requestWledRestoreState();
+  _wledOwner = WLED_NONE;
+}
+
+// A manual Lights choice wins over any running effect: drop the effect's
+// claim on the strip and its saved state, so nothing "restores" over it later
+void StateManager::takeBackLights() {
+  if (_wledOwner == WLED_NONE)
+    return;
+  _networkManager->requestWledDiscardSaved();
   _wledOwner = WLED_NONE;
 }
 

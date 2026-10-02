@@ -167,6 +167,12 @@ void WledClient::saveState() {
   http.end();
 }
 
+// The user picked new lights themselves, so there's nothing to go back to
+void WledClient::discardSavedState() {
+  _hasSavedState = false;
+  _savedState = "";
+}
+
 void WledClient::restoreState() {
   if (!_hasSavedState || _savedState.length() == 0)
     return;

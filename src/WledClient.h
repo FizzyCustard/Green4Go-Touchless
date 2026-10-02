@@ -18,6 +18,7 @@ public:
 
   void saveState();
   void restoreState();
+  void discardSavedState();
 
 private:
   WiFiClient _client;
