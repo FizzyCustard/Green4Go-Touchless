@@ -223,12 +223,20 @@ void DisplayManager::drawStandbyHint(uint16_t color) {
 }
 
 void DisplayManager::drawStandbyScreen(const BusView &bus) {
+  Screen prev = _screen;
   if (enterScreen(SCR_STANDBY)) {
-    _gfx->fillScreen(C_BLACK);
-    _baseState = -1;
+    if (prev == SCR_UNLOCK) {
+      // Cancelled unlock: the hint strip is still showing, so just erase the
+      // ring. The bands below repaint everything else without a full clear.
+      _gfx->fillArc(RING_CX, RING_CY, RING_OUTER, RING_INNER, 0, 360,
+                    C_BLACK);
+    } else {
+      _gfx->fillScreen(C_BLACK);
+      _baseState = -1;
+      drawStandbyHint(grey565(BREATH_MIN));
+    }
     drawTextInBand("COFFEE ZONE", 2, 24, 22, C_CYBER_PINK, C_BLACK);
     drawTextInBand("CONTROLLER", 2, 46, 22, C_CYBER_PINK, C_BLACK);
-    drawStandbyHint(grey565(BREATH_MIN));
     // Impossible values, so the dynamic bands below all paint
     strcpy(_sbLabel, "\x01");
     strcpy(_sbBus, "\x01");
@@ -276,8 +284,9 @@ void DisplayManager::drawStandbyScreen(const BusView &bus) {
 void DisplayManager::drawUnlockVisual(float progress) {
   if (enterScreen(SCR_UNLOCK)) {
     _gfx->fillRect(0, 0, SCREEN_W, CONTENT_H, C_BLACK);
-    _gfx->fillArc(RING_CX, RING_CY, RING_OUTER, RING_INNER, 0, 360, G_1);
+    // Label first: its band is full width and would cut into the ring
     drawTextInBand("Hold", 3, RING_CY - 20, 40, C_WHITE, C_BLACK);
+    _gfx->fillArc(RING_CX, RING_CY, RING_OUTER, RING_INNER, 0, 360, G_1);
     _unlockAngle = 0;
   }
 

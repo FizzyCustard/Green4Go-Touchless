@@ -6,6 +6,8 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
+class BodyStream;
+
 class BusClient {
 public:
   BusClient();
@@ -18,7 +20,7 @@ public:
 private:
   WiFiClientSecure _secureClient;
 
-  int parseNextArrival(Stream &stream, char *lineOut, size_t lineLen);
+  int parseNextArrival(BodyStream &stream, char *lineOut, size_t lineLen);
   static bool lineMatchesFilter(const String &lineName);
 };
 

@@ -61,6 +61,7 @@
 #define HTTP_TIMEOUT_MS 3000          // HTTP read timeout
 #define HTTP_CONNECT_TIMEOUT_MS 4000  // TfL connect timeout (TLS over the internet)
 #define BUS_PARSE_DEADLINE_MS 8000    // Hard cap on time spent parsing one response
+#define TLS_HANDSHAKE_TIMEOUT_S 10    // TfL TLS handshake (library default is 120s)
 #define WLED_TIMEOUT_MS 1000          // WLED is on the LAN, so fail fast
 #define WLED_BACKOFF_MS 30000         // Skip WLED calls for this long after a failure
 #define UNLOCK_TIME_MS 1000           // Time required to unlock
@@ -77,6 +78,7 @@
 #define BASE_ACTIVE_MAX_DISTANCE 25.0   // Max distance for base zone active
 #define UNLOCK_HYSTERESIS_CM 2.0        // Hysteresis for unlock cancel
 #define ZONE_HYSTERESIS_CM 0.5          // Sticky band around menu zone edges
+#define REARM_DISTANCE_CM 2.0           // Movement needed to re-arm after a selection
 #define TIMER_MENU_CLOSE_DISTANCE 30.0  // Hand beyond this closes the timer menu
 #define SENSOR_FAR_CM 100.0             // Value used when no echo comes back
 #define SENSOR_ECHO_TIMEOUT_US 12000    // ~2m max range; was 30ms (5m)
