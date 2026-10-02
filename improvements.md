@@ -44,6 +44,7 @@ Verification: there's no hardware in the review environment, so the firmware was
 |---|-----|--------|-----|
 | 21 | The debug `printf` called `readDistance()` a **second time** every tick | Doubled the blocking time and fired a second ping whose echo collides with the first, causing bogus readings | One ping per tick; debug output behind `DEBUG_SENSOR` |
 | 22 | Single stray echoes went straight into the EMA | Spikes smeared into several ticks of wrong distance: false unlocks in standby (one cause of the Phase 3 "standby flicker") and jumpy hover | Median-of-3 filter before the EMA |
+| 23a | Missed echoes went straight in as "100cm" | Two dropouts in a row with a hand held still read as "hand left", re-arming the row so it fired again (found by the simulation) | Up to 3 consecutive misses (150ms) are bridged with the last good reading |
 | 23 | 30ms echo timeout | With no hand present (most of the time) every tick blocked ~30ms, stalling animations | 12ms timeout (~2m range; interaction tops out at 30cm) |
 
 ### Network
@@ -143,5 +144,5 @@ Verification: there's no hardware in the review environment, so the firmware was
 ## Verification notes
 
 - **Compile + link:** all sources compile with `-Wall -Wextra` and zero warnings against Arduino-ESP32 2.0.17 / GFX 1.4.9, and the firmware links (flash ~830KB). PlatformIO's registry was blocked in the review environment, so this used an equivalent Arduino-core toolchain rather than `pio run`. Run `pio run` locally to confirm.
-- **Behaviour:** a host-side simulation compiled the real `StateManager.cpp` against stubs and ran scripted hand-movement scenarios (unlock-then-hold, bus screen bounce, lights back-out, API error restore, timer menu arming, standby timeout, hysteresis jitter, countdown, refresh cadence).
+- **Behaviour:** a host-side simulation compiled the real `StateManager.cpp` against stubs and ran scripted hand-movement scenarios (unlock-then-hold, bus screen bounce, lights back-out, API error restore, timer menu arming, standby timeout, hysteresis jitter, countdown, refresh cadence, fast sweeps, echo dropouts). 55 checks, all passing.
 - **Not verified:** anything visual on the real panel (animation smoothness, colours, text placement) and real sensor/network behaviour. Worth a 10-minute hands-on pass.
