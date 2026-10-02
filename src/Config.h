@@ -80,6 +80,7 @@
 #define TIMER_MENU_CLOSE_DISTANCE 30.0  // Hand beyond this closes the timer menu
 #define SENSOR_FAR_CM 100.0             // Value used when no echo comes back
 #define SENSOR_ECHO_TIMEOUT_US 12000    // ~2m max range; was 30ms (5m)
+#define SENSOR_MAX_MISSES 3             // Missed echoes bridged before reading "far" (150ms)
 
 // --- Validation Constants ---
 #define MAX_LINE_NAME_LENGTH 20         // Max bus line name length

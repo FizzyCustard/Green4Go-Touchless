@@ -15,6 +15,8 @@ DistanceSensor::DistanceSensor(int trigPin, int echoPin) {
   _smoothedDist = -1.0;
   _rawCount = 0;
   _rawIdx = 0;
+  _lastValid = -1.0;
+  _missCount = 0;
 }
 
 void DistanceSensor::begin() {
@@ -41,8 +43,21 @@ static float median3(float a, float b, float c) {
 void DistanceSensor::update() {
   float raw = readDistance();
 
-  // Timeout/no echo: treat as "far" so the cursor slides out of the zones
-  float dist = (raw < 0) ? SENSOR_FAR_CM : raw;
+  // HC-SR04s drop the odd echo even with a hand held still. Bridge short
+  // runs of misses with the last good reading; only a sustained miss means
+  // the hand has really gone, and then we treat it as "far" so the cursor
+  // slides out of the zones
+  float dist;
+  if (raw >= 0) {
+    _missCount = 0;
+    _lastValid = raw;
+    dist = raw;
+  } else if (_missCount < SENSOR_MAX_MISSES && _lastValid >= 0) {
+    _missCount++;
+    dist = _lastValid;
+  } else {
+    dist = SENSOR_FAR_CM;
+  }
 
   // Median of the last 3 readings drops single-sample spikes (stray echoes)
   // before they reach the EMA, which would otherwise smear them out

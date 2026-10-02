@@ -20,6 +20,10 @@ private:
   uint8_t _rawCount;
   uint8_t _rawIdx;
 
+  // Missed-echo bridging
+  float _lastValid;
+  uint8_t _missCount;
+
   // EMA weight for the newest (median-filtered) sample
   const float EMA_ALPHA = 0.35;
 
