@@ -18,7 +18,8 @@ enum NetworkAction {
   ACT_WLED_BUS_TIME,
   ACT_WLED_SAVE,
   ACT_WLED_RESTORE,
-  ACT_WLED_LEAVE_NOW
+  ACT_WLED_LEAVE_NOW,
+  ACT_WLED_DISCARD
 };
 
 struct NetworkCommand {
@@ -41,6 +42,7 @@ public:
   void requestWledSaveState();
   void requestWledRestoreState();
   void requestWledLeaveNow();
+  void requestWledDiscardSaved();
 
   // Retrieve results. Returns true (once) when a new fetch has finished.
   // seconds is time to the next bus or a negative BUS_* code, second the

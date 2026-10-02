@@ -59,6 +59,7 @@ void NetworkManager::requestWledBusTime(int minutes) {
 void NetworkManager::requestWledSaveState() { enqueue(ACT_WLED_SAVE); }
 void NetworkManager::requestWledRestoreState() { enqueue(ACT_WLED_RESTORE); }
 void NetworkManager::requestWledLeaveNow() { enqueue(ACT_WLED_LEAVE_NOW); }
+void NetworkManager::requestWledDiscardSaved() { enqueue(ACT_WLED_DISCARD); }
 
 // --- Status Retrieval ---
 
@@ -140,6 +141,10 @@ void NetworkManager::networkTask(void *parameter) {
 
       case ACT_WLED_LEAVE_NOW:
         self->_wledClient->setLeaveNow();
+        break;
+
+      case ACT_WLED_DISCARD:
+        self->_wledClient->discardSavedState();
         break;
       }
     }

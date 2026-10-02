@@ -91,6 +91,7 @@ private:
   void enterBusScreen();
   bool startBusEffect();
   void endBusEffect();
+  void takeBackLights();
 
   // Leave-now alert & display sleep
   bool inLeaveAlertHours();
