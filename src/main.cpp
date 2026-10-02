@@ -5,45 +5,33 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
-// Pin definitions now in Config.h
-
 DistanceSensor *sensor;
 DisplayManager *displayManager;
 StateManager *stateManager;
 
-// WiFi reconnection variables
-unsigned long lastWiFiCheck = 0;
-// WiFi check interval now defined in Config.h
+// Non-blocking WiFi upkeep. The ESP32 auto-reconnects on its own; this logs
+// state changes and nudges a reconnect every WIFI_CHECK_INTERVAL_MS as a
+// safety net. Never waits, so the UI keeps running while WiFi is down.
+void maintainWiFi() {
+  static bool wasConnected = false;
+  static unsigned long lastCheck = 0;
 
-void checkWiFiConnection() {
-  if (millis() - lastWiFiCheck < WIFI_CHECK_INTERVAL_MS) {
-    return; // Not time to check yet
-  }
-
-  lastWiFiCheck = millis();
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi disconnected. Attempting reconnection...");
-    WiFi.disconnect();
-    delay(100);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-    // Wait up to 10 seconds for reconnection
-    int timeout = 20;
-    while (WiFi.status() != WL_CONNECTED && timeout > 0) {
-      delay(500);
-      Serial.print(".");
-      timeout--;
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nWiFi Reconnected!");
-      Serial.print("IP Address: ");
+  bool connected = (WiFi.status() == WL_CONNECTED);
+  if (connected != wasConnected) {
+    wasConnected = connected;
+    if (connected) {
+      Serial.print("WiFi Connected! IP Address: ");
       Serial.println(WiFi.localIP());
     } else {
-      Serial.println("\nWiFi Reconnection failed. Will retry later.");
+      Serial.println("WiFi disconnected");
     }
   }
+
+  if (connected || millis() - lastCheck < WIFI_CHECK_INTERVAL_MS)
+    return;
+  lastCheck = millis();
+  Serial.println("WiFi still down, retrying in background...");
+  WiFi.reconnect();
 }
 
 void setup() {
@@ -59,45 +47,30 @@ void setup() {
   displayManager->begin();
   displayManager->drawBootScreen(); // Show splash immediately
 
-  // Connect Configured WiFi
+  // Connect in the background; the splash waits for data (up to
+  // SPLASH_MAX_MS) instead of setup() blocking here
   Serial.printf("Connecting to %s...\n", WIFI_SSID);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  // Wait up to 10s for connection
-  int timeout = 20;
-  while (WiFi.status() != WL_CONNECTED && timeout > 0) {
-    delay(500);
-    Serial.print(".");
-    timeout--;
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi Connected!");
-    Serial.print("IP Address: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("\nWiFi Connection Timeout (continues in background)");
-  }
 
   stateManager = new StateManager(sensor, displayManager);
 }
 
 void loop() {
-  // Check WiFi connection periodically
-  checkWiFiConnection();
+  maintainWiFi();
 
-  // Update Non-blocking Animations (Every loop)
+  // Sensor + state machine at a steady 20Hz (the HC-SR04 needs ~50ms
+  // between pings so echoes don't overlap)
+  static unsigned long lastTick = 0;
+  if (millis() - lastTick >= MAIN_LOOP_INTERVAL_MS) {
+    lastTick = millis();
+    sensor->update();
+    stateManager->update();
+  }
+
+  // Animations run at their own frame rate between ticks
   displayManager->update();
 
-  // Update Sensor Loop (Fast)
-  // Main Loop Timer (50ms = 20Hz)
-  static unsigned long lastUpdate = 0;
-  if (millis() - lastUpdate < MAIN_LOOP_INTERVAL_MS)
-    return;
-  lastUpdate = millis();
-
-  // Update Sensor (Now throttled)
-  sensor->update();
-
-  stateManager->update();
+  delay(1); // Yield instead of spinning flat out
 }

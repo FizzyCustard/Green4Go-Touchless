@@ -42,7 +42,7 @@ This project is an ESP32-S3 based application that uses an ultrasonic sensor to 
 - **Splash Screen**: 
     - **Visuals**: 3 Rotated Rectangles (White on Black).
     - **Duration**: Minimum 2 seconds.
-    - **Smart Delay**: Remains active until WiFi is connected AND valid Bus Data is retrieved.
+    - **Smart Delay**: Remains active until WiFi is connected AND the first bus fetch answers (a "no buses" answer counts), capped at 10 seconds so the device never hangs on the splash at night or offline.
 - **Sensor Warmup**: First 2 seconds of sensor readings are ignored to prevent false triggers.
 
 ### Unlock & Standby
@@ -60,6 +60,7 @@ This project is an ESP32-S3 based application that uses an ultrasonic sensor to 
     - **Action**: Transitions to **Main Screen (Homepage)**.
 - **Timeout (Auto-Lock)**:
     - If no interaction/selection is made for **30 seconds**, the device returns to **Standby Mode**.
+    - Exception: a running timer keeps the screen awake for up to 1 hour.
 
 ### Distance Zones (Active Mode)
 - **Usable Zone (< 15cm)**: This is the active interaction area. The screen content (menus, sliders) is mapped to this physical distance range.
@@ -68,7 +69,8 @@ This project is an ESP32-S3 based application that uses an ultrasonic sensor to 
 
 ### Interaction Mechanics
 - **Navigation**: Menu options are vertically stacked and split the 15cm "Usable Zone" proportionally.
-- **Selection ("Dwell Time")**: To select an item, the user must hold their hand steady within the target zone for **1 second**.
+- **Selection ("Dwell Time")**: To select an item, the user must hold their hand steady within the target zone for **1 second**. A progress bar fills along the bottom of the hovered row during the dwell.
+- **Re-arm**: After any selection or screen change, nothing can be selected until the hand moves to a different row (or away). This stops a still hand from chaining selections across screens.
 - **Non-blocking Execution**: Menu interactions, success screens, and background tasks do not use explicit delays (`delay()`). UI fluidity is maintained using `millis()` state checks.
 - **Smoothing & Stability**:
     - **EMA Smoothing**: Use Exponential Moving Average (Alpha ~0.15).
@@ -117,9 +119,11 @@ This project is an ESP32-S3 based application that uses an ultrasonic sensor to 
     - **Green**: 6 - 9 mins.
     - **Orange**: 10 - 12 mins.
     - **WLED Control**: Also updates the WLED strip color to match the status.
-- **Updates**: Fetches data on entry and periodically (e.g., every 30s).
-- **Interaction**:
-    - **Unified Back Button**: When on the Bus Times screen, navigating any zone in the Usable Zone (0-15cm) acts as a single large back button, returning to the Homepage.
+- **Updates**: Fetches data on entry and every 30s. Minutes count down locally between fetches. A failed refresh keeps showing the last good data for up to 3 minutes.
+- **Interaction** (same pattern as the Timer screen):
+    - **Top (0-5cm)**: Bus info (dead zone).
+    - **Middle (5-10cm)**: "Refresh" - fetch again and replay the WLED status effect.
+    - **Bottom (10-15cm)**: "Back".
 
 ## System Reliability & Maintenance
 

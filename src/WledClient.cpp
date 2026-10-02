@@ -4,42 +4,62 @@
 WledClient::WledClient() {
   _hasSavedState = false;
   _savedState = "";
+  _backoffUntil = 0;
+  _inBackoff = false;
 }
 
 void WledClient::begin() {
   // Nothing specific to init for HTTP
 }
 
-void WledClient::sendRequest(String &jsonPayload) {
+// WLED lives on the LAN, so a failed call means it's off or unplugged. Back
+// off for a while rather than making every request wait out a timeout, which
+// would also delay any bus fetch queued behind it.
+bool WledClient::ready(const char *what) {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WLED] WiFi not connected");
-    return;
+    Serial.printf("[WLED] %s skipped: WiFi not connected\n", what);
+    return false;
   }
+  if (_inBackoff && (long)(millis() - _backoffUntil) < 0) {
+    Serial.printf("[WLED] %s skipped: WLED unreachable, backing off\n", what);
+    return false;
+  }
+  _inBackoff = false;
+  return true;
+}
 
-  HTTPClient http;
+void WledClient::noteResult(int httpCode) {
+  if (httpCode > 0)
+    return;
+  _inBackoff = true;
+  _backoffUntil = millis() + WLED_BACKOFF_MS;
+}
 
+bool WledClient::buildUrl(String &url) {
   // Validate WLED_IP length to prevent excessive memory usage
   if (strlen(WLED_IP) > MAX_IP_LENGTH) {
     Serial.println("[WLED] WLED_IP too long");
-    return;
+    return false;
   }
+  url = "http://" + String(WLED_IP) + "/json/state";
+  return url.length() <= MAX_URL_LENGTH;
+}
 
-  String url = "http://" + String(WLED_IP) + "/json/state";
-
-  // Additional safety: check final URL length
-  if (url.length() > MAX_URL_LENGTH) {
-    Serial.println("[WLED] Final URL too long");
+void WledClient::sendRequest(String &jsonPayload) {
+  String url;
+  if (!ready("Send") || !buildUrl(url))
     return;
-  }
 
   Serial.printf("[WLED] Sending to %s: %s\n", url.c_str(), jsonPayload.c_str());
 
-  // Use WiFiClient for HTTP
-  http.setTimeout(HTTP_TIMEOUT_MS);
+  HTTPClient http;
+  http.setConnectTimeout(WLED_TIMEOUT_MS);
+  http.setTimeout(WLED_TIMEOUT_MS);
   http.begin(_client, url);
   http.addHeader("Content-Type", "application/json");
 
   int httpCode = http.POST(jsonPayload);
+  noteResult(httpCode);
 
   if (httpCode > 0) {
     Serial.printf("[WLED] Success: %d\n", httpCode);
@@ -83,8 +103,8 @@ void WledClient::updateForBusTime(int minutes) {
   if (minutes < 0)
     return;
 
-  // Logic:
-  // Red: < 5 mins OR > 12 mins
+  // Logic (must match DisplayManager::drawBusScreen):
+  // Red: <= 5 mins OR > 12 mins
   // Green: 6 - 9 mins
   // Orange: 10 - 12 mins
 
@@ -109,37 +129,25 @@ void WledClient::updateForBusTime(int minutes) {
 }
 
 void WledClient::saveState() {
-  if (WiFi.status() != WL_CONNECTED)
+  _hasSavedState = false;
+  String url;
+  if (!ready("Save") || !buildUrl(url))
     return;
-
-  // Validate WLED_IP length
-  if (strlen(WLED_IP) > MAX_IP_LENGTH) {
-    Serial.println("[WLED] WLED_IP too long for saveState");
-    return;
-  }
 
   HTTPClient http;
-  String url = "http://" + String(WLED_IP) + "/json/state";
-
-  // Check final URL length
-  if (url.length() > MAX_URL_LENGTH) {
-    Serial.println("[WLED] Final URL too long for saveState");
-    return;
-  }
-
-  // Use WiFiClient for HTTP
-  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(WLED_TIMEOUT_MS);
+  http.setTimeout(WLED_TIMEOUT_MS);
   http.begin(_client, url);
 
   int httpCode = http.GET();
-  if (httpCode > 0) {
+  noteResult(httpCode);
+  if (httpCode == HTTP_CODE_OK) {
     _savedState = http.getString();
-    _hasSavedState = true;
+    _hasSavedState = _savedState.length() > 0;
     Serial.println("[WLED] State Saved");
   } else {
     Serial.printf("[WLED] Failed to save state: %s\n",
                   http.errorToString(httpCode).c_str());
-    _hasSavedState = false;
   }
   http.end();
 }
