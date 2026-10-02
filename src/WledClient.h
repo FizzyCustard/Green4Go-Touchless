@@ -14,6 +14,7 @@ public:
   void setCoffee();
   void setLoading();
   void updateForBusTime(int minutes);
+  void setLeaveNow();
 
   void saveState();
   void restoreState();

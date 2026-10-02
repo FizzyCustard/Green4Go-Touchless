@@ -19,4 +19,8 @@
 // IP address of your WLED instance
 #define WLED_IP "192.168.1.100"
 
+// --- OTA Updates ---
+// Password for over-the-air uploads. Leave undefined to disable OTA.
+#define OTA_PASSWORD "change-me"
+
 #endif // SECRETS_H

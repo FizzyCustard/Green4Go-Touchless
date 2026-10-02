@@ -20,6 +20,23 @@
 #define DWELL_BAR_H 6
 #define TEXT_MAX_W 228 // Leave a 6px margin either side
 
+// Hand-position cursor: a marker riding a rail down the right-hand gutter
+#define CURSOR_H 14
+#define CURSOR_EASE 0.35f // Fraction of the remaining distance per frame
+#define RAIL_W 2
+
+// Backlight PWM
+#define BL_CHANNEL 0
+#define BL_FREQ 5000
+#define BL_BITS 8
+#define BL_ON 255
+
+// OTA progress bar
+#define OTA_BAR_X 20
+#define OTA_BAR_Y 150
+#define OTA_BAR_W 200
+#define OTA_BAR_H 16
+
 static const char *STANDBY_HINT = "Hold close to wake";
 #define STANDBY_HINT_SIZE 2
 #define STANDBY_HINT_Y 272
@@ -43,8 +60,11 @@ void DisplayManager::begin() {
   _gfx->setTextWrap(false);
   // Clear before the backlight comes on so stale panel RAM never shows
   _gfx->fillScreen(C_BLACK);
-  pinMode(_blPin, OUTPUT);
-  digitalWrite(_blPin, HIGH);
+  // PWM so sleep and wake can fade rather than snap
+  ledcSetup(BL_CHANNEL, BL_FREQ, BL_BITS);
+  ledcAttachPin(_blPin, BL_CHANNEL);
+  ledcWrite(BL_CHANNEL, BL_ON);
+  _blLevel = _blTarget = BL_ON;
 }
 
 // --- Helpers ---
@@ -59,6 +79,22 @@ bool DisplayManager::enterScreen(Screen s) {
   _dwellRow = -1;
   _dwellW = 0;
   _animating = false;
+
+  // Interactive screens keep a gutter on the right for the hand cursor and
+  // paint their content to the left of it
+  bool gutter = (s == SCR_MAIN || s == SCR_LIGHTS || s == SCR_TIMER ||
+                 s == SCR_BUS || s == SCR_MESSAGE);
+  if (gutter && _paintW == SCREEN_W) {
+    _gfx->fillRect(SCREEN_W - GUTTER_W, 0, GUTTER_W, BASE_Y + BASE_H, C_BLACK);
+    _gfx->fillRect(SCREEN_W - GUTTER_W / 2 - RAIL_W / 2, 0, RAIL_W,
+                   BASE_Y + BASE_H, G_1);
+  }
+  if (gutter != (_paintW != SCREEN_W)) {
+    _cursorPos = -1;
+    _cursorDrawnY = -1;
+    _cursorTarget = -1;
+  }
+  _paintW = gutter ? SCREEN_W - GUTTER_W : SCREEN_W;
   return true;
 }
 
@@ -104,17 +140,17 @@ void DisplayManager::drawTextInBand(const char *text, uint8_t size, int bandY,
   int len = strlen(text);
   int tw = 6 * size * len;
   int th = 8 * size;
-  if (tw > SCREEN_W)
-    tw = SCREEN_W;
-  int tx = (SCREEN_W - tw) / 2;
+  if (tw > _paintW)
+    tw = _paintW;
+  int tx = (_paintW - tw) / 2;
   int ty = bandY + (bandH - th) / 2;
   int bandBottom = bandY + bandH;
 
-  fillRectClipped(0, bandY, SCREEN_W, ty - bandY, bg, 0, clipBottom);
-  fillRectClipped(0, ty + th, SCREEN_W, bandBottom - (ty + th), bg, 0,
+  fillRectClipped(0, bandY, _paintW, ty - bandY, bg, 0, clipBottom);
+  fillRectClipped(0, ty + th, _paintW, bandBottom - (ty + th), bg, 0,
                   clipBottom);
   fillRectClipped(0, ty, tx, th, bg, 0, clipBottom);
-  fillRectClipped(tx + tw, ty, SCREEN_W - (tx + tw), th, bg, 0, clipBottom);
+  fillRectClipped(tx + tw, ty, _paintW - (tx + tw), th, bg, 0, clipBottom);
 
   int visibleBottom = min(bandBottom, clipBottom);
   if (len == 0 || ty >= visibleBottom)
@@ -127,7 +163,7 @@ void DisplayManager::drawTextInBand(const char *text, uint8_t size, int bandY,
     _gfx->fillRect(tx, visibleBottom - visible % size, tw, visible % size, bg);
   }
 
-  _gfx->setTextBound(0, 0, SCREEN_W, visibleBottom);
+  _gfx->setTextBound(0, 0, _paintW, visibleBottom);
   _gfx->setTextSize(size);
   _gfx->setTextColor(fg, bg);
   _gfx->setCursor(tx, ty);
@@ -185,7 +221,30 @@ void DisplayManager::update() {
       _activeRow = -10; // Let the next draw apply the hover state
   }
 
-  if (_screen == SCR_STANDBY) {
+  // Backlight fade
+  if (_blLevel != _blTarget) {
+    float t = (now - _blFadeStart) / (float)BACKLIGHT_FADE_MS;
+    if (t >= 1.0f)
+      t = 1.0f;
+    _blLevel = _blFrom + (int)((_blTarget - _blFrom) * t);
+    ledcWrite(BL_CHANNEL, _blLevel);
+  }
+
+  // Hand cursor glides towards its target rather than jumping per tick
+  if (_paintW != SCREEN_W) {
+    if (_cursorTarget < 0) {
+      _cursorPos = -1;
+    } else if (_cursorPos < 0) {
+      _cursorPos = _cursorTarget;
+    } else {
+      _cursorPos += (_cursorTarget - _cursorPos) * CURSOR_EASE;
+    }
+    int y = (_cursorPos < 0) ? -1 : (int)lroundf(_cursorPos);
+    if (y != _cursorDrawnY)
+      drawCursorAt(y);
+  }
+
+  if (_screen == SCR_STANDBY && _blTarget > 0) {
     // Slow "breathing" hint so the idle screen feels alive
     float phase = (now % BREATH_PERIOD_MS) / (float)BREATH_PERIOD_MS;
     float b = 0.5f - 0.5f * cosf(2.0f * PI * phase);
@@ -246,38 +305,54 @@ void DisplayManager::drawStandbyScreen(const BusView &bus) {
   char label[20];
   char main[20];
   char status[20] = "";
+  uint16_t labelColor = G_TEXT_DIM;
+  uint16_t mainColor = C_CYBER_BLUE;
+  uint16_t statusColor = C_LIGHT_RED;
 
-  if (bus.minutes >= 0 && bus.line && bus.line[0])
+  if (bus.leaveNow) {
+    snprintf(label, sizeof(label), "LEAVE NOW");
+    labelColor = C_GREEN;
+  } else if (bus.minutes >= 0 && bus.line && bus.line[0]) {
     snprintf(label, sizeof(label), "NEXT %s", bus.line);
-  else
+  } else {
     snprintf(label, sizeof(label), "NEXT BUS");
+  }
 
-  if (bus.minutes == 0)
+  // While alerting, show the bus you're leaving for (may be the second one)
+  int shown = bus.leaveNow ? bus.alertMinutes : bus.minutes;
+  if (bus.leaveNow)
+    mainColor = C_GREEN;
+  if (shown == 0)
     snprintf(main, sizeof(main), "Due");
-  else if (bus.minutes > 0)
-    snprintf(main, sizeof(main), "%d min", bus.minutes);
-  else if (bus.minutes == BUS_NO_BUSES)
+  else if (shown > 0)
+    snprintf(main, sizeof(main), "%d min", shown);
+  else if (shown == BUS_NO_BUSES)
     snprintf(main, sizeof(main), "No buses");
   else
     snprintf(main, sizeof(main), "--");
 
-  if (!bus.online)
+  if (!bus.online) {
     snprintf(status, sizeof(status), "No WiFi");
-  else if (bus.minutes == BUS_API_ERROR)
+  } else if (bus.minutes == BUS_API_ERROR) {
     snprintf(status, sizeof(status), "TfL unavailable");
+  } else if (!bus.leaveNow && bus.minutes >= 0 && bus.secondMinutes >= 0) {
+    snprintf(status, sizeof(status), "then %d min", bus.secondMinutes);
+    statusColor = G_TEXT_DIM;
+  }
 
   if (strcmp(label, _sbLabel) != 0) {
     strcpy(_sbLabel, label);
-    drawTextInBand(label, 2, 100, 24, G_TEXT_DIM, C_BLACK);
+    drawTextInBand(label, 2, 100, 24, labelColor, C_BLACK);
   }
-  if (strcmp(main, _sbBus) != 0) {
+  if (strcmp(main, _sbBus) != 0 || mainColor != _sbBusColor) {
     strcpy(_sbBus, main);
+    _sbBusColor = mainColor;
     drawTextInBand(main, fitTextSize(strlen(main), 5, TEXT_MAX_W), 124, 60,
-                   C_CYBER_BLUE, C_BLACK);
+                   mainColor, C_BLACK);
   }
   if (strcmp(status, _sbStatus) != 0) {
     strcpy(_sbStatus, status);
-    drawTextInBand(status, 2, 186, 26, C_LIGHT_RED, C_BLACK);
+    drawTextInBand(status, 2, 186, 26, statusColor, C_BLACK);
   }
 }
 
@@ -368,9 +443,16 @@ void DisplayManager::drawBusScreen(const BusView &bus, int activeRow) {
   else
     snprintf(main, sizeof(main), "Loading...");
 
+  bool hasLine = bus.line && bus.line[0];
   if (bus.refreshing && m >= 0)
     snprintf(sub, sizeof(sub), "Updating...");
-  else if (m >= 0 && bus.line && bus.line[0])
+  else if (bus.leaveNow)
+    snprintf(sub, sizeof(sub), "LEAVE NOW!");
+  else if (m >= 0 && bus.secondMinutes >= 0 && hasLine)
+    snprintf(sub, sizeof(sub), "%s, then %dm", bus.line, bus.secondMinutes);
+  else if (m >= 0 && bus.secondMinutes >= 0)
+    snprintf(sub, sizeof(sub), "Then %d min", bus.secondMinutes);
+  else if (m >= 0 && hasLine)
     snprintf(sub, sizeof(sub), "Route %s", bus.line);
 
   bool bgChanged = (bg != _busBg);
@@ -417,7 +499,7 @@ void DisplayManager::drawDwellProgress(int row, float progress) {
     progress = 0;
   if (progress > 1)
     progress = 1;
-  int w = (int)(progress * SCREEN_W);
+  int w = (int)(progress * _paintW);
   int y = row * ROW_H + ROW_H - DWELL_BAR_H;
 
   if (w > _dwellW) {
@@ -439,7 +521,7 @@ void DisplayManager::updateBaseZone(bool active) {
     drawTextInBand("Closer to select", 2, BASE_Y, BASE_H, C_WHITE,
                    G_BASE_LIGHT, BASE_Y + BASE_H);
   } else {
-    _gfx->fillRect(0, BASE_Y, SCREEN_W, BASE_H, G_BASE_DARK);
+    _gfx->fillRect(0, BASE_Y, _paintW, BASE_H, G_BASE_DARK);
   }
 }
 
@@ -455,7 +537,7 @@ int DisplayManager::menuTop(float openness) const {
 
 void DisplayManager::drawTimerScreen(int activeRow, bool menuOpen) {
   if (enterScreen(SCR_TIMER)) {
-    _gfx->fillRect(0, 0, SCREEN_W, CONTENT_H, C_BLACK);
+    _gfx->fillRect(0, 0, _paintW, CONTENT_H, C_BLACK);
     strcpy(_timerStr, "00:00");
     _openness = menuOpen ? 1.0f : 0.0f;
     _menuTarget = menuOpen;
@@ -493,7 +575,7 @@ void DisplayManager::renderTimerFrame(float openness) {
 
   // 1. Strip the menu uncovered while sliding down
   if (top > _drawnMenuTop)
-    _gfx->fillRect(0, _drawnMenuTop, SCREEN_W, top - _drawnMenuTop, C_BLACK);
+    _gfx->fillRect(0, _drawnMenuTop, _paintW, top - _drawnMenuTop, C_BLACK);
 
   // 2. Strip the timer uncovered while moving
   if (_drawnTimerY >= 0 && _drawnTimerY != cy) {
@@ -507,7 +589,7 @@ void DisplayManager::renderTimerFrame(float openness) {
       clearTop = oldTop;
       clearBottom = min(oldBottom, bandTop);
     }
-    fillRectClipped(0, clearTop, SCREEN_W, clearBottom - clearTop, C_BLACK, 0,
+    fillRectClipped(0, clearTop, _paintW, clearBottom - clearTop, C_BLACK, 0,
                     top);
   }
 
@@ -542,6 +624,100 @@ void DisplayManager::drawTimerValue(unsigned long elapsedMs) {
   int cy = timerCentreY(_openness);
   drawTextInBand(_timerStr, TIMER_TEXT_SIZE, cy - TIMER_BAND_H / 2,
                  TIMER_BAND_H, C_WHITE, C_BLACK, menuTop(_openness));
+}
+
+// --- Hand cursor ---
+
+void DisplayManager::setHandCursor(float dist) {
+  if (dist < 0 || dist > BASE_ACTIVE_MAX_DISTANCE) {
+    _cursorTarget = -1;
+    return;
+  }
+  // Same scale as the screen: 0-15cm over the three rows, 15-25cm over the
+  // base strip
+  if (dist <= MAX_INTERACTION_DISTANCE)
+    _cursorTarget = dist / MAX_INTERACTION_DISTANCE * CONTENT_H;
+  else
+    _cursorTarget = BASE_Y + (dist - MAX_INTERACTION_DISTANCE) /
+                                 (BASE_ACTIVE_MAX_DISTANCE -
+                                  MAX_INTERACTION_DISTANCE) *
+                                 BASE_H;
+}
+
+// Moves the marker, repainting only the rail it uncovered
+void DisplayManager::drawCursorAt(int y) {
+  const int gx = SCREEN_W - GUTTER_W;
+  const int railX = SCREEN_W - GUTTER_W / 2 - RAIL_W / 2;
+  const int maxTop = BASE_Y + BASE_H - CURSOR_H;
+
+  int newTop = -1;
+  if (y >= 0)
+    newTop = constrain(y - CURSOR_H / 2, 0, maxTop);
+
+  if (_cursorDrawnY >= 0) {
+    int oldTop = constrain(_cursorDrawnY - CURSOR_H / 2, 0, maxTop);
+    int oldBottom = oldTop + CURSOR_H;
+    // Uncovered strips: above and below the new marker
+    int segs[2][2] = {{oldTop, oldBottom}, {0, 0}};
+    if (newTop >= 0) {
+      segs[0][0] = oldTop;
+      segs[0][1] = min(oldBottom, newTop);
+      segs[1][0] = max(oldTop, newTop + CURSOR_H);
+      segs[1][1] = oldBottom;
+    }
+    for (int i = 0; i < 2; i++) {
+      int h = segs[i][1] - segs[i][0];
+      if (h <= 0)
+        continue;
+      _gfx->fillRect(gx, segs[i][0], GUTTER_W, h, C_BLACK);
+      _gfx->fillRect(railX, segs[i][0], RAIL_W, h, G_1);
+    }
+  }
+
+  if (newTop >= 0)
+    _gfx->fillRect(gx + 1, newTop, GUTTER_W - 2, CURSOR_H, C_WHITE);
+  _cursorDrawnY = y;
+}
+
+// --- Backlight ---
+
+void DisplayManager::setAwake(bool awake) {
+  int target = awake ? BL_ON : 0;
+  if (target == _blTarget)
+    return;
+  _blFrom = _blLevel;
+  _blTarget = target;
+  _blFadeStart = millis();
+}
+
+// --- OTA ---
+
+void DisplayManager::drawOtaProgress(unsigned int percent) {
+  if (enterScreen(SCR_OTA)) {
+    // OTA blocks the main loop, so update() can't fade: snap the light on
+    _blLevel = _blTarget = BL_ON;
+    ledcWrite(BL_CHANNEL, BL_ON);
+    _gfx->fillScreen(C_BLACK);
+    _baseState = -1;
+    drawTextInBand("Updating", 3, 100, 32, C_WHITE, C_BLACK);
+    _gfx->drawRect(OTA_BAR_X - 2, OTA_BAR_Y - 2, OTA_BAR_W + 4, OTA_BAR_H + 4,
+                   G_TEXT_DIM);
+    drawTextInBand("Don't unplug", 2, 190, 24, G_TEXT_DIM, C_BLACK);
+    _otaW = 0;
+  }
+  if (percent > 100)
+    percent = 100;
+  int w = OTA_BAR_W * percent / 100;
+  if (w > _otaW) {
+    _gfx->fillRect(OTA_BAR_X + _otaW, OTA_BAR_Y, w - _otaW, OTA_BAR_H,
+                   C_CYBER_BLUE);
+    _otaW = w;
+  }
+}
+
+void DisplayManager::drawOtaMessage(const char *message, uint16_t color) {
+  drawOtaProgress(_otaW * 100 / OTA_BAR_W);
+  drawTextInBand(message, 2, 190, 24, color, C_BLACK);
 }
 
 void DisplayManager::fillRotatedRect(int16_t x, int16_t y, int16_t w, int16_t h,

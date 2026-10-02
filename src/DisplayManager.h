@@ -39,6 +39,7 @@
 #define NUM_ROWS 3
 #define BASE_Y 240
 #define BASE_H 80
+#define GUTTER_W 8 // Right-hand strip for the hand cursor on menu screens
 
 // Everything the screens need to know about the next bus.
 struct BusView {
@@ -46,6 +47,9 @@ struct BusView {
   const char *line; // Route of the soonest bus ("" if unknown)
   bool refreshing;  // A fetch is in flight
   bool online;      // WiFi connected
+  int secondMinutes; // The bus after, or -1
+  bool leaveNow;     // A bus is in the leave-now window
+  int alertMinutes;  // Minutes to the bus we're alerting for
 };
 
 class DisplayManager {
@@ -78,6 +82,18 @@ public:
   // Base zone (15-25cm feedback strip)
   void updateBaseZone(bool active);
 
+  // Hand-position marker in the right-hand gutter (menu screens only).
+  // Pass a negative distance to hide it.
+  void setHandCursor(float dist);
+
+  // Backlight: fades to off/on
+  void setAwake(bool awake);
+  bool isAwake() const { return _blTarget > 0; }
+
+  // Over-the-air update screen
+  void drawOtaProgress(unsigned int percent);
+  void drawOtaMessage(const char *message, uint16_t color);
+
 private:
   enum Screen {
     SCR_NONE,
@@ -88,7 +104,8 @@ private:
     SCR_LIGHTS,
     SCR_TIMER,
     SCR_BUS,
-    SCR_MESSAGE
+    SCR_MESSAGE,
+    SCR_OTA
   };
 
   Arduino_DataBus *_bus;
@@ -96,6 +113,20 @@ private:
   int _blPin;
 
   Screen _screen = SCR_NONE;
+  int _paintW = SCREEN_W; // Width content paints to (less the cursor gutter)
+
+  // Hand cursor (y in screen pixels, -1 = hidden)
+  float _cursorTarget = -1;
+  float _cursorPos = -1;
+  int _cursorDrawnY = -1;
+
+  // Backlight fade
+  int _blLevel = 0;
+  int _blTarget = 0;
+  int _blFrom = 0;
+  unsigned long _blFadeStart = 0;
+
+  int _otaW = 0;
   int _activeRow = -10;
   uint16_t _rowColor[NUM_ROWS] = {0, 0, 0}; // Highlight colour per row
 
@@ -110,6 +141,7 @@ private:
   char _sbLabel[20] = "";
   char _sbBus[20] = "";
   char _sbStatus[20] = "";
+  uint16_t _sbBusColor = 0;
   uint16_t _breathColor = 0;
   unsigned long _lastFrame = 0;
 
@@ -146,6 +178,7 @@ private:
                     const uint16_t on[NUM_ROWS], const uint16_t off[NUM_ROWS],
                     int activeRow);
   void drawStandbyHint(uint16_t color);
+  void drawCursorAt(int y);
   void renderTimerFrame(float openness);
   int timerCentreY(float openness) const;
   int menuTop(float openness) const;

@@ -17,7 +17,8 @@ enum NetworkAction {
   ACT_WLED_LOADING,
   ACT_WLED_BUS_TIME,
   ACT_WLED_SAVE,
-  ACT_WLED_RESTORE
+  ACT_WLED_RESTORE,
+  ACT_WLED_LEAVE_NOW
 };
 
 struct NetworkCommand {
@@ -39,12 +40,14 @@ public:
   void requestWledBusTime(int minutes);
   void requestWledSaveState();
   void requestWledRestoreState();
+  void requestWledLeaveNow();
 
   // Retrieve results. Returns true (once) when a new fetch has finished.
-  // seconds is time to the next bus or a negative BUS_* code; completedAt is
-  // the millis() when the result came back.
-  bool takeBusResult(int &seconds, unsigned long &completedAt, char *line,
-                     size_t lineLen);
+  // seconds is time to the next bus or a negative BUS_* code, second the
+  // bus after that (-1 if none); completedAt is the millis() when the
+  // result came back.
+  bool takeBusResult(int &seconds, int &second, unsigned long &completedAt,
+                     char *line, size_t lineLen);
   bool isBusFetchPending();
 
 private:
@@ -58,6 +61,7 @@ private:
   bool _busDataReady;
   bool _busFetchPending;
   int _latestBusSeconds;
+  int _latestSecondSeconds;
   unsigned long _latestBusAt;
   char _latestLine[MAX_LINE_NAME_LENGTH + 1];
 

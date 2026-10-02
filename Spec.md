@@ -125,6 +125,13 @@ This project is an ESP32-S3 based application that uses an ultrasonic sensor to 
     - **Middle (5-10cm)**: "Refresh" - fetch again and replay the WLED status effect.
     - **Bottom (10-15cm)**: "Back".
 
+### 5. Always-on Features
+- **Hand Cursor**: On menu screens a marker in the right-hand gutter shows where the hand maps (0-15cm over the rows, 15-25cm over the base).
+- **Next Two Buses**: Standby and Bus Times show the bus after next ("then 11 min").
+- **Leave Now Alert**: Mon-Fri 07:00-09:30, when a bus is 5-6 minutes away (5 min walk, latest leave at 6), WLED pulses green and standby shows "LEAVE NOW". Configurable in `Config.h`.
+- **Display Sleep**: Backlight fades off after 15 minutes idle in standby; a hand within 25cm wakes it.
+- **OTA Updates**: `pio run -e esp32s3_ota -t upload` once `OTA_PASSWORD` is set in `secrets.h`.
+
 ## System Reliability & Maintenance
 
 ### Recent Improvements (v2.1)

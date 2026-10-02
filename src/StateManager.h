@@ -20,6 +20,10 @@ enum AppState {
   SHOWING_API_ERROR
 };
 
+// Who currently "owns" the WLED strip. Whoever takes it from NONE saves the
+// user's state first; handing back to NONE restores it.
+enum WledOwner { WLED_NONE, WLED_BUS, WLED_LEAVE };
+
 class StateManager {
 public:
   StateManager(DistanceSensor *sensor, DisplayManager *display);
@@ -46,11 +50,15 @@ private:
 
   // Standby & Power Logic
   unsigned long _lastInteractionTime;
-  unsigned long _busEffectStartTime; // 0 = WLED bus effect not active
+  unsigned long _busEffectStartTime; // When the bus colour effect started
+  WledOwner _wledOwner;
+  unsigned long _lastPresenceTime; // For display sleep
+  bool _leaveAlertActive;
 
   // Bus data. Stored as "seconds at fetch time" so the display can count
   // down locally between fetches.
   int _busSeconds;          // >= 0 valid, otherwise a BUS_* code
+  int _busSecond;           // Seconds to the bus after that, or -1
   unsigned long _busAt;     // millis() when _busSeconds was fetched
   char _busLine[MAX_LINE_NAME_LENGTH + 1];
   bool _lastBusResultOk;
@@ -75,12 +83,21 @@ private:
   // Bus helpers
   void requestBus();
   void pollBusResult();
-  void applyBusResult(int seconds, unsigned long at, const char *line);
+  void applyBusResult(int seconds, int second, unsigned long at,
+                      const char *line);
   int busMinutes();
+  long remainingSeconds(int fetchedSeconds);
   BusView busView();
   void enterBusScreen();
-  void startBusEffect();
+  bool startBusEffect();
   void endBusEffect();
+
+  // Leave-now alert & display sleep
+  bool inLeaveAlertHours();
+  int leaveAlertMinutes();
+  bool busNearLeaveWindow();
+  void updateLeaveAlert();
+  void updateDisplaySleep(float dist);
 
   // Actions
   void actionMainMenu(int row);

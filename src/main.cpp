@@ -3,11 +3,45 @@
 #include "DistanceSensor.h"
 #include "StateManager.h"
 #include <Arduino.h>
+#include <ArduinoOTA.h>
 #include <WiFi.h>
+#include <time.h>
 
 DistanceSensor *sensor;
 DisplayManager *displayManager;
 StateManager *stateManager;
+
+#ifdef OTA_PASSWORD
+// Over-the-air updates: `pio run -e esp32s3_ota -t upload` once the device
+// is on WiFi. The screen shows progress; the update blocks the loop while it
+// runs, then the device reboots into the new firmware.
+static bool otaReady = false;
+
+void setupOta() {
+  ArduinoOTA.setHostname(OTA_HOSTNAME);
+  ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.onStart([]() {
+    Serial.println("OTA: starting");
+    displayManager->drawOtaProgress(0);
+  });
+  ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
+    displayManager->drawOtaProgress(total ? done / (total / 100 + 1) : 0);
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("OTA: done, rebooting");
+    displayManager->drawOtaProgress(100);
+    displayManager->drawOtaMessage("Restarting...", C_GREEN);
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("OTA: error %u\n", error);
+    displayManager->drawOtaMessage("Update failed", C_LIGHT_RED);
+    delay(2000); // Leave the message up before the UI takes over again
+  });
+  ArduinoOTA.begin();
+  otaReady = true;
+  Serial.printf("OTA ready at %s.local\n", OTA_HOSTNAME);
+}
+#endif
 
 // Non-blocking WiFi upkeep. The ESP32 auto-reconnects on its own; this logs
 // state changes and nudges a reconnect every WIFI_CHECK_INTERVAL_MS as a
@@ -22,6 +56,10 @@ void maintainWiFi() {
     if (connected) {
       Serial.print("WiFi Connected! IP Address: ");
       Serial.println(WiFi.localIP());
+#ifdef OTA_PASSWORD
+      if (!otaReady)
+        setupOta();
+#endif
     } else {
       Serial.println("WiFi disconnected");
     }
@@ -54,11 +92,22 @@ void setup() {
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
+  // Local time for the leave-now alert hours. Syncs once WiFi is up.
+  configTzTime(TIMEZONE, NTP_SERVER_1, NTP_SERVER_2);
+
+#ifndef OTA_PASSWORD
+  Serial.println("OTA disabled: set OTA_PASSWORD in secrets.h to enable");
+#endif
+
   stateManager = new StateManager(sensor, displayManager);
 }
 
 void loop() {
   maintainWiFi();
+#ifdef OTA_PASSWORD
+  if (otaReady)
+    ArduinoOTA.handle();
+#endif
 
   // Sensor + state machine at a steady 20Hz (the HC-SR04 needs ~50ms
   // between pings so echoes don't overlap)

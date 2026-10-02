@@ -1,6 +1,7 @@
 #include "StateManager.h"
 #include <WiFi.h>
 #include <math.h>
+#include <time.h>
 
 #define ROW_NONE -1
 #define ROW_UNSET -2 // Disarmed, waiting for the first reading on a screen
@@ -41,8 +42,12 @@ StateManager::StateManager(DistanceSensor *sensor, DisplayManager *display) {
 
   _lastInteractionTime = millis();
   _busEffectStartTime = 0;
+  _wledOwner = WLED_NONE;
+  _lastPresenceTime = millis();
+  _leaveAlertActive = false;
 
   _busSeconds = BUS_LOADING;
+  _busSecond = -1;
   _busAt = 0;
   _busLine[0] = '\0';
   _lastBusResultOk = false;
@@ -135,14 +140,13 @@ void StateManager::update() {
 
   pollBusResult();
 
-  if (isInteractive(_currentState)) {
-    bool baseActive =
-        (dist > BASE_ACTIVE_MIN_DISTANCE && dist < BASE_ACTIVE_MAX_DISTANCE);
-    _display->updateBaseZone(baseActive);
-  }
+  if (_currentState != BOOT_WARMUP)
+    updateLeaveAlert();
+  updateDisplaySleep(dist);
 
   checkStandbyTimeout();
 
+  AppState tickState = _currentState;
   switch (_currentState) {
   case BOOT_WARMUP:
     updateWarmup();
@@ -174,8 +178,17 @@ void StateManager::update() {
     break;
   }
 
+  // Base strip and cursor go after the screen draw, and wait a tick after a
+  // state change so the new screen has set up its layout (and cursor gutter)
+  if (isInteractive(_currentState) && _currentState == tickState) {
+    bool baseActive =
+        (dist > BASE_ACTIVE_MIN_DISTANCE && dist < BASE_ACTIVE_MAX_DISTANCE);
+    _display->updateBaseZone(baseActive);
+    _display->setHandCursor(dist);
+  }
+
   // Hand the lights back after the bus colour has been shown for a while
-  if (_busEffectStartTime > 0 &&
+  if (_wledOwner == WLED_BUS &&
       millis() - _busEffectStartTime > BUS_EFFECT_TIMEOUT_MS) {
     endBusEffect();
   }
@@ -370,8 +383,8 @@ void StateManager::actionLights(int row) {
 
 void StateManager::actionBusTimes(int row) {
   if (row == 1) { // Refresh
-    startBusEffect();
-    _networkManager->requestWledLoading();
+    if (startBusEffect())
+      _networkManager->requestWledLoading();
     requestBus();
   } else if (row == 2) { // Back
     goToState(MAIN_MENU);
@@ -387,13 +400,13 @@ void StateManager::requestBus() {
 }
 
 void StateManager::pollBusResult() {
-  int seconds;
+  int seconds, second;
   unsigned long at;
   char line[MAX_LINE_NAME_LENGTH + 1];
-  if (!_networkManager->takeBusResult(seconds, at, line, sizeof(line)))
+  if (!_networkManager->takeBusResult(seconds, second, at, line, sizeof(line)))
     return;
 
-  applyBusResult(seconds, at, line);
+  applyBusResult(seconds, second, at, line);
 
   if (_currentState != BUS_TIMES)
     return;
@@ -406,7 +419,7 @@ void StateManager::pollBusResult() {
     return;
   }
 
-  if (_busEffectStartTime > 0) {
+  if (_wledOwner == WLED_BUS) {
     if (m >= 0)
       _networkManager->requestWledBusTime(m);
     else
@@ -414,7 +427,7 @@ void StateManager::pollBusResult() {
   }
 }
 
-void StateManager::applyBusResult(int seconds, unsigned long at,
+void StateManager::applyBusResult(int seconds, int second, unsigned long at,
                                   const char *line) {
   _lastBusResultOk = (seconds >= 0 || seconds == BUS_NO_BUSES);
 
@@ -427,6 +440,7 @@ void StateManager::applyBusResult(int seconds, unsigned long at,
   }
 
   _busSeconds = seconds;
+  _busSecond = (seconds >= 0) ? second : -1;
   _busAt = at;
   strncpy(_busLine, line, sizeof(_busLine) - 1);
   _busLine[sizeof(_busLine) - 1] = '\0';
@@ -436,10 +450,16 @@ void StateManager::applyBusResult(int seconds, unsigned long at,
 int StateManager::busMinutes() {
   if (_busSeconds < 0)
     return _busSeconds;
-  long remainingMs = (long)_busSeconds * 1000L - (long)(millis() - _busAt);
-  if (remainingMs <= 0)
-    return 0;
-  return remainingMs / 60000L;
+  return remainingSeconds(_busSeconds) / 60;
+}
+
+// Seconds left for a bus that was fetchedSeconds away at the last fetch
+// (never negative), or -1 if there's no such bus
+long StateManager::remainingSeconds(int fetchedSeconds) {
+  if (fetchedSeconds < 0)
+    return -1;
+  long left = (long)fetchedSeconds - (long)((millis() - _busAt) / 1000UL);
+  return left < 0 ? 0 : left;
 }
 
 BusView StateManager::busView() {
@@ -448,36 +468,114 @@ BusView StateManager::busView() {
   v.line = _busLine;
   v.refreshing = _networkManager->isBusFetchPending();
   v.online = (WiFi.status() == WL_CONNECTED);
+  long second = remainingSeconds(_busSecond);
+  v.secondMinutes = (_busSeconds >= 0 && second >= 0) ? second / 60 : -1;
+  v.leaveNow = _leaveAlertActive;
+  v.alertMinutes = _leaveAlertActive ? leaveAlertMinutes() : -1;
   return v;
 }
 
 void StateManager::enterBusScreen() {
   goToState(BUS_TIMES);
-  startBusEffect();
 
   // Recent data shows instantly (and colours the lights straight away);
   // otherwise show the loading animation while we fetch
-  if (_busSeconds >= 0 && millis() - _busAt < BUS_FRESH_MS)
-    _networkManager->requestWledBusTime(busMinutes());
-  else
-    _networkManager->requestWledLoading();
+  if (startBusEffect()) {
+    if (_busSeconds >= 0 && millis() - _busAt < BUS_FRESH_MS)
+      _networkManager->requestWledBusTime(busMinutes());
+    else
+      _networkManager->requestWledLoading();
+  }
 
   requestBus();
 }
 
-void StateManager::startBusEffect() {
-  if (_busEffectStartTime == 0)
+// Returns false if the leave-now alert has the lights (it wins)
+bool StateManager::startBusEffect() {
+  if (_wledOwner == WLED_LEAVE)
+    return false;
+  if (_wledOwner == WLED_NONE)
     _networkManager->requestWledSaveState();
+  _wledOwner = WLED_BUS;
   _busEffectStartTime = millis();
-  if (_busEffectStartTime == 0)
-    _busEffectStartTime = 1; // 0 means "inactive"
+  return true;
 }
 
 void StateManager::endBusEffect() {
-  if (_busEffectStartTime == 0)
+  if (_wledOwner != WLED_BUS)
     return;
   _networkManager->requestWledRestoreState();
-  _busEffectStartTime = 0;
+  _wledOwner = WLED_NONE;
+}
+
+// --- Leave-now alert ---
+
+bool StateManager::inLeaveAlertHours() {
+  // Read the clock directly: getLocalTime() sleeps 10ms when unsynced
+  time_t now = time(nullptr);
+  if (now < 1700000000)
+    return false; // NTP hasn't synced yet
+  struct tm t;
+  localtime_r(&now, &t);
+  if (!(LEAVE_ALERT_DAYS & (1 << t.tm_wday)))
+    return false;
+  int hhmm = t.tm_hour * 100 + t.tm_min;
+  return hhmm >= LEAVE_ALERT_START_HHMM && hhmm < LEAVE_ALERT_END_HHMM;
+}
+
+// Minutes to the first of the next two buses that leaving now still
+// catches, or -1 if neither is in the window
+int StateManager::leaveAlertMinutes() {
+  if (_busSeconds < 0 || millis() - _busAt > BUS_STALE_MS)
+    return -1;
+  long buses[2] = {remainingSeconds(_busSeconds), remainingSeconds(_busSecond)};
+  for (int i = 0; i < 2; i++) {
+    if (buses[i] > WALK_TIME_MIN * 60L && buses[i] <= LEAVE_LATEST_MIN * 60L)
+      return buses[i] / 60;
+  }
+  return -1;
+}
+
+// A bus is a few minutes from the window: worth refreshing more often
+bool StateManager::busNearLeaveWindow() {
+  if (_busSeconds < 0 || !inLeaveAlertHours())
+    return false;
+  long buses[2] = {remainingSeconds(_busSeconds), remainingSeconds(_busSecond)};
+  for (int i = 0; i < 2; i++) {
+    if (buses[i] > WALK_TIME_MIN * 60L &&
+        buses[i] <= (LEAVE_LATEST_MIN + 4) * 60L)
+      return true;
+  }
+  return false;
+}
+
+void StateManager::updateLeaveAlert() {
+  bool want = leaveAlertMinutes() >= 0 && inLeaveAlertHours();
+  if (want == _leaveAlertActive)
+    return;
+  _leaveAlertActive = want;
+
+  if (want) {
+    Serial.println("[Alert] Leave now");
+    if (_wledOwner == WLED_NONE)
+      _networkManager->requestWledSaveState();
+    _wledOwner = WLED_LEAVE; // Takes over from the bus effect if running
+    _networkManager->requestWledLeaveNow();
+  } else if (_wledOwner == WLED_LEAVE) {
+    _networkManager->requestWledRestoreState();
+    _wledOwner = WLED_NONE;
+  }
+}
+
+// --- Display sleep ---
+
+void StateManager::updateDisplaySleep(float dist) {
+  // Anything going on keeps the screen lit: a hand nearby, any screen
+  // other than standby, or a leave-now alert
+  bool present = dist >= 0 && dist < BASE_ACTIVE_MAX_DISTANCE;
+  if (present || _leaveAlertActive || _currentState != STANDBY)
+    _lastPresenceTime = millis();
+  _display->setAwake(millis() - _lastPresenceTime < DISPLAY_SLEEP_MS);
 }
 
 // --- Passive states ---
@@ -513,7 +611,9 @@ void StateManager::updateStandby(float dist) {
 
   // Refresh periodically, sooner if the last attempt failed
   unsigned long interval =
-      _lastBusResultOk ? BUS_UPDATE_INTERVAL_MS : BUS_ERROR_RETRY_MS;
+      !_lastBusResultOk     ? BUS_ERROR_RETRY_MS
+      : busNearLeaveWindow() ? LEAVE_REFRESH_MS
+                             : BUS_UPDATE_INTERVAL_MS;
   if (!_busEverRequested || millis() - _lastBusRequest > interval)
     requestBus();
 

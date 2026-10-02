@@ -62,9 +62,11 @@ void BusClient::begin() {
   _secureClient.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
 }
 
-int BusClient::getNextBusSeconds(char *lineOut, size_t lineLen) {
+int BusClient::getNextBusSeconds(char *lineOut, size_t lineLen,
+                                 int &secondOut) {
   if (lineLen > 0)
     lineOut[0] = '\0';
+  secondOut = -1;
 
   if (WiFi.status() != WL_CONNECTED) {
     return BUS_OFFLINE;
@@ -94,7 +96,7 @@ int BusClient::getNextBusSeconds(char *lineOut, size_t lineLen) {
 
   if (httpCode == HTTP_CODE_OK) {
     BodyStream body(http.getStream(), http.getSize(), HTTP_TIMEOUT_MS);
-    apiResult = parseNextArrival(body, lineOut, lineLen);
+    apiResult = parseNextArrival(body, lineOut, lineLen, secondOut);
   } else {
     Serial.printf("[Bus] HTTP failed: %s (%d)\n",
                   http.errorToString(httpCode).c_str(), httpCode);
@@ -117,8 +119,9 @@ bool BusClient::lineMatchesFilter(const String &lineName) {
 }
 
 int BusClient::parseNextArrival(BodyStream &stream, char *lineOut,
-                                size_t lineLen) {
+                                size_t lineLen, int &secondOut) {
   int minSeconds = -1;
+  int secondSeconds = -1;
   int iterations = 0;
   unsigned long started = millis();
 
@@ -147,12 +150,16 @@ int BusClient::parseNextArrival(BodyStream &stream, char *lineOut,
     if (!lineMatchesFilter(lineName))
       continue;
 
+    // Keep the two soonest
     if (minSeconds == -1 || seconds < minSeconds) {
+      secondSeconds = minSeconds;
       minSeconds = seconds;
       if (lineLen > 0) {
         strncpy(lineOut, lineName.c_str(), lineLen - 1);
         lineOut[lineLen - 1] = '\0';
       }
+    } else if (secondSeconds == -1 || seconds < secondSeconds) {
+      secondSeconds = seconds;
     }
   }
 
@@ -165,8 +172,10 @@ int BusClient::parseNextArrival(BodyStream &stream, char *lineOut,
       return BUS_API_ERROR;
   }
 
-  if (minSeconds != -1)
+  if (minSeconds != -1) {
+    secondOut = secondSeconds;
     return minSeconds;
+  }
 
   return BUS_NO_BUSES;
 }
