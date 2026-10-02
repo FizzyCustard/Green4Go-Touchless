@@ -541,7 +541,8 @@ int StateManager::leaveAlertMinutes() {
     return -1;
   long buses[2] = {remainingSeconds(_busSeconds), remainingSeconds(_busSecond)};
   for (int i = 0; i < 2; i++) {
-    if (buses[i] > WALK_TIME_MIN * 60L && buses[i] <= LEAVE_LATEST_MIN * 60L)
+    if (buses[i] >= LEAVE_WINDOW_MIN_MIN * 60L &&
+        buses[i] <= LEAVE_WINDOW_MAX_MIN * 60L)
       return buses[i] / 60;
   }
   return -1;
@@ -553,8 +554,8 @@ bool StateManager::busNearLeaveWindow() {
     return false;
   long buses[2] = {remainingSeconds(_busSeconds), remainingSeconds(_busSecond)};
   for (int i = 0; i < 2; i++) {
-    if (buses[i] > WALK_TIME_MIN * 60L &&
-        buses[i] <= (LEAVE_LATEST_MIN + 4) * 60L)
+    if (buses[i] >= LEAVE_WINDOW_MIN_MIN * 60L &&
+        buses[i] <= (LEAVE_WINDOW_MAX_MIN + 4) * 60L)
       return true;
   }
   return false;

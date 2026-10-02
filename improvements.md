@@ -104,18 +104,18 @@ Verification: there's no hardware in the review environment, so the firmware was
 
 **Next two buses.** Standby shows "then 11 min" under the main time. The Bus screen shows "36, then 11m". Both count down locally like the first bus.
 
-**Leave now alert.** When either of the next two buses is more than 5 minutes but no more than 6 minutes away, the strip does a fast green breathe and standby shows **LEAVE NOW** in green with that bus's time. If the first bus is already uncatchable, it alerts for the second. Active **Mon-Fri 07:00-09:30** (UK time, BST handled via NTP). Change it in `Config.h`:
+**Leave now alert.** While either of the next two buses is between 8 and 6 minutes away (inclusive), the strip does a fast green breathe and standby shows **LEAVE NOW** in green with that bus's time. If the first bus is already uncatchable, it alerts for the second. Active **Mon-Fri 07:00-09:30** (UK time, BST handled via NTP). Change it in `Config.h`:
 
 ```cpp
-#define WALK_TIME_MIN 5
-#define LEAVE_LATEST_MIN 6
+#define LEAVE_WINDOW_MAX_MIN 8
+#define LEAVE_WINDOW_MIN_MIN 6
 #define LEAVE_ALERT_DAYS 0b0111110 // bit 0 = Sunday ... bit 6 = Saturday
 #define LEAVE_ALERT_START_HHMM 700
 #define LEAVE_ALERT_END_HHMM 930
 ```
 
 Details:
-- During alert hours, standby refreshes every 20s (instead of 60s) once a bus is within 10 minutes, so the 1-minute window is caught accurately.
+- During alert hours, standby refreshes every 20s (instead of 60s) once a bus is within 12 minutes, so the window is caught accurately.
 - The alert outranks the Bus Times light effect. Opening Bus Times during an alert leaves the green pulse alone. Only one save/restore of your lighting happens however the two overlap.
 - An alert also wakes a sleeping screen.
 - Picking Rainbow or Coffee during an alert wins: your choice stays and the alert won't "restore" over it when it ends.

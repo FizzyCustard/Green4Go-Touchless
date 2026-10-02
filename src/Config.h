@@ -95,11 +95,11 @@
 #define MAX_ESP32_PIN 48                // Max valid ESP32 pin number
 
 // --- Leave Now Alert ---
-// Pulses the lights green when a bus is in the window where leaving now
-// still catches it: more than WALK_TIME_MIN away, and no more than
-// LEAVE_LATEST_MIN away. Only active during the hours below (local time).
-#define WALK_TIME_MIN 5
-#define LEAVE_LATEST_MIN 6
+// Pulses the lights green while a bus is between LEAVE_WINDOW_MAX_MIN and
+// LEAVE_WINDOW_MIN_MIN away (both inclusive): the time to head out for it.
+// Only active during the hours below (local time).
+#define LEAVE_WINDOW_MAX_MIN 8 // Alert starts with the bus 8:00 away...
+#define LEAVE_WINDOW_MIN_MIN 6 // ...and ends after 6:00 (5 min walk + buffer)
 #define LEAVE_ALERT_DAYS 0b0111110 // Bit per weekday, bit 0 = Sunday (Mon-Fri)
 #define LEAVE_ALERT_START_HHMM 700 // 07:00
 #define LEAVE_ALERT_END_HHMM 930   // 09:30
