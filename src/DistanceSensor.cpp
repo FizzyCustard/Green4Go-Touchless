@@ -73,7 +73,7 @@ void DistanceSensor::update() {
     _smoothedDist = filtered;
   } else {
     _smoothedDist =
-        (EMA_ALPHA * filtered) + ((1.0 - EMA_ALPHA) * _smoothedDist);
+        (SENSOR_EMA_ALPHA * filtered) + ((1.0 - SENSOR_EMA_ALPHA) * _smoothedDist);
   }
 
 #if DEBUG_SENSOR
@@ -99,7 +99,7 @@ float DistanceSensor::readDistance() {
   if (duration == 0)
     return -1.0;
 
-  float distance = duration * 0.034 / 2;
+  float distance = duration * SPEED_OF_SOUND_CM_PER_US / 2; // There and back
 
   // Validate reasonable distance range (0.2cm to 400cm for typical ultrasonic
   // sensors)

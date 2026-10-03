@@ -18,15 +18,23 @@
 #define TFL_API_URL_TEMPLATE "https://api.tfl.gov.uk/StopPoint/%s/Arrivals"
 
 // --- WLED Integration ---
-#define WLED_DEFAULT_PRESET 1
-#define WLED_RAINBOW_PRESET 2 // Example preset ID for rainbow
-#define WLED_SOLID_PRESET 3   // Example preset ID for solid
+#define WLED_STATE_MAX_BYTES 8192 // Largest WLED state we'll save and restore
+
+// --- Bus status colours (screen and lights) ---
+// Red: <= RED_MAX (too soon to catch) or > ORANGE_MAX (long wait)
+// Green: up to GREEN_MAX. Orange: up to ORANGE_MAX.
+#define BUS_RED_MAX_MIN 5
+#define BUS_GREEN_MAX_MIN 9
+#define BUS_ORANGE_MAX_MIN 12
+
+// --- Standby screen title ---
+#define TITLE_LINE_1 "COFFEE ZONE"
+#define TITLE_LINE_2 "CONTROLLER"
 
 // --- Hardware Pin Definitions ---
 // Display pins for ESP32-S3
 #define TFT_SCK 39
 #define TFT_MOSI 38
-#define TFT_MISO GFX_NOT_DEFINED
 #define TFT_DC 42
 #define TFT_CS 45
 #define TFT_RST 0
@@ -41,12 +49,13 @@
 #define STANDBY_TIMEOUT_MS 30000
 #define TIMER_AWAKE_MAX_MS 3600000UL  // A running timer keeps the screen awake for up to 1 hour
 #define BUS_UPDATE_INTERVAL_MS 60000   // Standby refresh when the last fetch worked
-#define BUS_ERROR_RETRY_MS 15000       // Standby refresh when the last fetch failed
+#define BUS_ERROR_RETRY_MS 15000       // First retry after a failed fetch...
+#define BUS_ERROR_MAX_RETRY_MS 300000UL // ...doubling up to 5 min while it keeps failing
 #define BUS_SCREEN_REFRESH_MS 30000    // Refresh while the Bus Times screen is open
 #define BUS_STALE_MS 180000            // Keep counting down old data this long if a refresh fails
 #define BUS_FRESH_MS 60000             // Data younger than this is shown instantly on the Bus screen
 
-// --- Bus status codes (negative "minutes" values) ---
+// --- Bus status codes (negative values where a time would otherwise be) ---
 #define BUS_LOADING -1   // No data yet / fetch in flight
 #define BUS_API_ERROR -2 // HTTP or parse failure
 #define BUS_NO_BUSES -3  // API worked but no matching arrivals
@@ -81,7 +90,11 @@
 #define REARM_DISTANCE_CM 2.0           // Movement needed to re-arm after a selection
 #define TIMER_MENU_CLOSE_DISTANCE 30.0  // Hand beyond this closes the timer menu
 #define SENSOR_FAR_CM 100.0             // Value used when no echo comes back
-#define SENSOR_ECHO_TIMEOUT_US 12000    // ~2m max range; was 30ms (5m)
+#define SENSOR_ECHO_TIMEOUT_US 12000    // ~2m max range
+#define SENSOR_EMA_ALPHA 0.35           // Smoothing weight of each new reading
+#define SPEED_OF_SOUND_CM_PER_US 0.034
+#define MOVE_THRESHOLD_CM 1.0           // Change that counts as the hand moving
+#define STATIC_OBJECT_MS 60000UL        // Still this long = an object, not a hand
 #define SENSOR_MAX_MISSES 3             // Missed echoes bridged before reading "far" (150ms)
 
 // --- Validation Constants ---
@@ -104,9 +117,11 @@
 #define LEAVE_ALERT_START_HHMM 700 // 07:00
 #define LEAVE_ALERT_END_HHMM 930   // 09:30
 #define LEAVE_REFRESH_MS 20000     // Refresh this often when a bus is getting close
+#define LEAVE_REFRESH_LEAD_MIN 4   // ...i.e. within the window plus this lead
 #define TIMEZONE "GMT0BST,M3.5.0/1,M10.5.0" // UK time incl. BST
 #define NTP_SERVER_1 "pool.ntp.org"
 #define NTP_SERVER_2 "time.google.com"
+#define NTP_VALID_EPOCH 1700000000L // Clock before this = NTP not synced yet
 
 // --- Display Sleep ---
 #define DISPLAY_SLEEP_MS 900000UL  // Backlight off after 15 min idle in standby
@@ -117,6 +132,19 @@
 #ifndef OTA_HOSTNAME
 #define OTA_HOSTNAME "green4go" // Reachable as green4go.local
 #endif
+
+// --- Network task ---
+#define NET_QUEUE_LENGTH 10
+#define NET_TASK_STACK_BYTES 16384
+
+// --- Health monitor ---
+// Logs heap/stack once a minute and restarts cleanly (only while idle in
+// standby) if the device gets into a state it can't recover from on its own
+#define HEALTH_CHECK_INTERVAL_MS 60000UL
+#define HEALTH_MIN_HEAP_BLOCK 24000     // TLS needs ~17KB contiguous blocks
+#define HEALTH_LOW_HEAP_RESTART_MS 300000UL // Low that long -> restart
+#define HEALTH_NO_DATA_RESTART_MS 7200000UL // No good TfL data for 2h on WiFi
+#define HEALTH_NET_STUCK_MS 120000UL    // One network command running this long
 
 // --- Debug ---
 #define DEBUG_SENSOR 0 // 1 = print raw/smoothed distance every tick

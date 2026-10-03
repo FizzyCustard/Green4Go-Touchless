@@ -294,8 +294,8 @@ void DisplayManager::drawStandbyScreen(const BusView &bus) {
       _baseState = -1;
       drawStandbyHint(grey565(BREATH_MIN));
     }
-    drawTextInBand("COFFEE ZONE", 2, 24, 22, C_CYBER_PINK, C_BLACK);
-    drawTextInBand("CONTROLLER", 2, 46, 22, C_CYBER_PINK, C_BLACK);
+    drawTextInBand(TITLE_LINE_1, 2, 24, 22, C_CYBER_PINK, C_BLACK);
+    drawTextInBand(TITLE_LINE_2, 2, 46, 22, C_CYBER_PINK, C_BLACK);
     // Impossible values, so the dynamic bands below all paint
     strcpy(_sbLabel, "\x01");
     strcpy(_sbBus, "\x01");
@@ -421,9 +421,9 @@ void DisplayManager::drawBusScreen(const BusView &bus, int activeRow) {
   int m = bus.minutes;
   if (m < 0)
     bg = G_1;
-  else if (m <= 5 || m > 12)
+  else if (m <= BUS_RED_MAX_MIN || m > BUS_ORANGE_MAX_MIN)
     bg = C_DARK_RED;
-  else if (m <= 9)
+  else if (m <= BUS_GREEN_MAX_MIN)
     bg = C_GREEN;
   else
     bg = C_ORANGE;
@@ -716,7 +716,8 @@ void DisplayManager::drawOtaProgress(unsigned int percent) {
 }
 
 void DisplayManager::drawOtaMessage(const char *message, uint16_t color) {
-  drawOtaProgress(_otaW * 100 / OTA_BAR_W);
+  if (_screen != SCR_OTA)
+    drawOtaProgress(0);
   drawTextInBand(message, 2, 190, 24, color, C_BLACK);
 }
 

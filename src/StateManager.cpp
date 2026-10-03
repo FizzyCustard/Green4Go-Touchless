@@ -46,11 +46,20 @@ StateManager::StateManager(DistanceSensor *sensor, DisplayManager *display) {
   _lastPresenceTime = millis();
   _leaveAlertActive = false;
 
+  _moveRefDist = -1;
+  _lastMoveAt = millis();
+
+  _lastHealthCheck = millis();
+  _heapLow = false;
+  _lowHeapSince = 0;
+  _lastBusOkAt = millis();
+
   _busSeconds = BUS_LOADING;
   _busSecond = -1;
   _busAt = 0;
   _busLine[0] = '\0';
   _lastBusResultOk = false;
+  _busFailCount = 0;
   _busEverRequested = false;
   _lastBusRequest = 0;
 
@@ -58,22 +67,6 @@ StateManager::StateManager(DistanceSensor *sensor, DisplayManager *display) {
   _timerRunning = false;
   _timerMenuVisible = false;
   _timerMenuArmed = false;
-}
-
-StateManager::~StateManager() {
-  // Clean up dynamically allocated objects
-  if (_busClient) {
-    delete _busClient;
-    _busClient = nullptr;
-  }
-  if (_wledClient) {
-    delete _wledClient;
-    _wledClient = nullptr;
-  }
-  if (_networkManager) {
-    delete _networkManager;
-    _networkManager = nullptr;
-  }
 }
 
 // --- State plumbing ---
@@ -137,11 +130,15 @@ void StateManager::update() {
   }
 
   float dist = _sensor->getSmoothedDistance();
+  trackMovement(dist);
 
+  checkHealth();
   pollBusResult();
 
-  if (_currentState != BOOT_WARMUP)
+  if (_currentState != BOOT_WARMUP) {
+    maintainBusData();
     updateLeaveAlert();
+  }
   updateDisplaySleep(dist);
 
   checkStandbyTimeout();
@@ -262,8 +259,6 @@ void StateManager::updateInteractive(float dist) {
   }
   case BUS_TIMES:
     firstRow = 1;
-    if (now - _lastBusRequest > BUS_SCREEN_REFRESH_MS)
-      requestBus();
     break;
   default:
     break;
@@ -274,19 +269,26 @@ void StateManager::updateInteractive(float dist) {
   int row = (zone >= firstRow) ? zone : ROW_NONE;
 
   // Interaction Tracking
-  if (dist < BASE_ACTIVE_MAX_DISTANCE)
+  if (handPresent(dist))
     resetStandbyTimer();
 
   // Re-arm once the hand leaves, or genuinely moves to a different row.
   // The distance check stops a hand resting near a boundary from drifting
   // across it and re-arming without the user meaning to move.
   if (!_armed) {
+    bool arm = false;
     if (_rearmRow == ROW_UNSET)
       _rearmRow = row;
     else if (row == ROW_NONE && _rearmRow != ROW_NONE)
-      _armed = true;
+      arm = true;
     else if (row != _rearmRow && fabsf(dist - _disarmDist) > REARM_DISTANCE_CM)
+      arm = true;
+    if (arm) {
+      // The dwell counts from the moment of arming, never from earlier
+      // time spent on the row while disarmed
       _armed = true;
+      _zoneStartTime = now;
+    }
   }
 
   // Dwell tracking
@@ -373,7 +375,7 @@ void StateManager::actionLights(int row) {
     _networkManager->requestWledRainbow();
     goToState(SHOWING_SUCCESS);
     _display->drawSuccessScreen("Rainbow!");
-  } else if (row == 1) { // Solid (Now Coffee)
+  } else if (row == 1) { // Coffee (warm white)
     takeBackLights();
     _networkManager->requestWledCoffee();
     goToState(SHOWING_SUCCESS);
@@ -399,6 +401,28 @@ void StateManager::requestBus() {
   _lastBusRequest = millis();
   _busEverRequested = true;
   _networkManager->requestBusUpdate();
+}
+
+// Keeps bus data fresh in every state (after boot), so the countdown and the
+// leave-now alert stay accurate whichever screen is up
+void StateManager::maintainBusData() {
+  unsigned long interval;
+  if (!_lastBusResultOk) {
+    // Back off while it keeps failing (TfL down, no internet), so the
+    // network task isn't tied up retrying and TfL isn't hammered
+    interval = BUS_ERROR_RETRY_MS;
+    for (uint8_t i = 1; i < _busFailCount && interval < BUS_ERROR_MAX_RETRY_MS;
+         i++)
+      interval *= 2;
+    if (interval > BUS_ERROR_MAX_RETRY_MS)
+      interval = BUS_ERROR_MAX_RETRY_MS;
+  } else {
+    interval = busNearLeaveWindow() ? LEAVE_REFRESH_MS : BUS_UPDATE_INTERVAL_MS;
+  }
+  if (_currentState == BUS_TIMES && interval > BUS_SCREEN_REFRESH_MS)
+    interval = BUS_SCREEN_REFRESH_MS;
+  if (!_busEverRequested || millis() - _lastBusRequest > interval)
+    requestBus();
 }
 
 void StateManager::pollBusResult() {
@@ -432,6 +456,12 @@ void StateManager::pollBusResult() {
 void StateManager::applyBusResult(int seconds, int second, unsigned long at,
                                   const char *line) {
   _lastBusResultOk = (seconds >= 0 || seconds == BUS_NO_BUSES);
+  if (_lastBusResultOk) {
+    _busFailCount = 0;
+    _lastBusOkAt = millis();
+  } else if (_busFailCount < 255) {
+    _busFailCount++;
+  }
 
   // A failed refresh shouldn't wipe good data: keep counting down what we
   // had until it's too old to trust
@@ -511,10 +541,10 @@ void StateManager::endBusEffect() {
 }
 
 // A manual Lights choice wins over any running effect: drop the effect's
-// claim on the strip and its saved state, so nothing "restores" over it later
+// claim on the strip and its saved state, so nothing "restores" over it later.
+// Always discard, even with no effect running: WledClient keeps a state whose
+// restore failed, and that copy would otherwise resurface after this choice.
 void StateManager::takeBackLights() {
-  if (_wledOwner == WLED_NONE)
-    return;
   _networkManager->requestWledDiscardSaved();
   _wledOwner = WLED_NONE;
 }
@@ -524,7 +554,7 @@ void StateManager::takeBackLights() {
 bool StateManager::inLeaveAlertHours() {
   // Read the clock directly: getLocalTime() sleeps 10ms when unsynced
   time_t now = time(nullptr);
-  if (now < 1700000000)
+  if (now < NTP_VALID_EPOCH)
     return false; // NTP hasn't synced yet
   struct tm t;
   localtime_r(&now, &t);
@@ -555,7 +585,7 @@ bool StateManager::busNearLeaveWindow() {
   long buses[2] = {remainingSeconds(_busSeconds), remainingSeconds(_busSecond)};
   for (int i = 0; i < 2; i++) {
     if (buses[i] >= LEAVE_WINDOW_MIN_MIN * 60L &&
-        buses[i] <= (LEAVE_WINDOW_MAX_MIN + 4) * 60L)
+        buses[i] <= (LEAVE_WINDOW_MAX_MIN + LEAVE_REFRESH_LEAD_MIN) * 60L)
       return true;
   }
   return false;
@@ -584,10 +614,73 @@ void StateManager::updateLeaveAlert() {
 void StateManager::updateDisplaySleep(float dist) {
   // Anything going on keeps the screen lit: a hand nearby, any screen
   // other than standby, or a leave-now alert
-  bool present = dist >= 0 && dist < BASE_ACTIVE_MAX_DISTANCE;
-  if (present || _leaveAlertActive || _currentState != STANDBY)
+  if (handPresent(dist) || _leaveAlertActive || _currentState != STANDBY)
     _lastPresenceTime = millis();
   _display->setAwake(millis() - _lastPresenceTime < DISPLAY_SLEEP_MS);
+}
+
+// --- Presence & health ---
+
+void StateManager::trackMovement(float dist) {
+  if (_moveRefDist < 0 || fabsf(dist - _moveRefDist) > MOVE_THRESHOLD_CM) {
+    _moveRefDist = dist;
+    _lastMoveAt = millis();
+  }
+}
+
+// Something within reach that has moved recently. A hand always moves; a
+// mug or kettle parked in front of the sensor doesn't, so it stops keeping
+// the screen awake (or re-unlocking it) after STATIC_OBJECT_MS
+bool StateManager::handPresent(float dist) {
+  return dist >= 0 && dist < BASE_ACTIVE_MAX_DISTANCE &&
+         millis() - _lastMoveAt < STATIC_OBJECT_MS;
+}
+
+// Once a minute: log heap and stack so slow problems are visible on serial,
+// and restart cleanly if the device is stuck in a way it can't recover from
+// by itself. Only restarts while idle in standby, so nobody's mid-use and
+// no light effect is lost.
+void StateManager::checkHealth() {
+  unsigned long now = millis();
+  if (now - _lastHealthCheck < HEALTH_CHECK_INTERVAL_MS)
+    return;
+  _lastHealthCheck = now;
+
+  uint32_t maxBlock = ESP.getMaxAllocHeap();
+  Serial.printf("[Health] heap free %u, largest block %u, lowest %u; stack "
+                "free: loop %u, network %u\n",
+                ESP.getFreeHeap(), maxBlock, ESP.getMinFreeHeap(),
+                (unsigned)uxTaskGetStackHighWaterMark(NULL),
+                _networkManager->stackFreeBytes());
+
+  if (maxBlock < HEALTH_MIN_HEAP_BLOCK) {
+    if (!_heapLow) {
+      _heapLow = true;
+      _lowHeapSince = now;
+    }
+  } else {
+    _heapLow = false;
+  }
+
+  const char *reason = nullptr;
+  if (_networkManager->busyForMs() > HEALTH_NET_STUCK_MS)
+    reason = "network task stuck";
+  else if (_heapLow && now - _lowHeapSince > HEALTH_LOW_HEAP_RESTART_MS)
+    reason = "heap too fragmented for TLS";
+  else if (WiFi.status() == WL_CONNECTED &&
+           now - _lastBusOkAt > HEALTH_NO_DATA_RESTART_MS)
+    reason = "no TfL data for 2 hours";
+  if (!reason)
+    return;
+
+  bool idle = _currentState == STANDBY && _wledOwner == WLED_NONE &&
+              !_leaveAlertActive;
+  if (!idle)
+    return; // Try again next check
+
+  Serial.printf("[Health] Restarting: %s\n", reason);
+  Serial.flush();
+  ESP.restart();
 }
 
 // --- Passive states ---
@@ -615,19 +708,11 @@ void StateManager::updateWarmup() {
 }
 
 void StateManager::updateStandby(float dist) {
-  // Unlock Trigger
-  if (dist < UNLOCK_DISTANCE_CM) {
+  // Unlock Trigger (a hand, not something left sitting on the sensor)
+  if (dist < UNLOCK_DISTANCE_CM && handPresent(dist)) {
     goToState(UNLOCK_SEQUENCE);
     return;
   }
-
-  // Refresh periodically, sooner if the last attempt failed
-  unsigned long interval =
-      !_lastBusResultOk     ? BUS_ERROR_RETRY_MS
-      : busNearLeaveWindow() ? LEAVE_REFRESH_MS
-                             : BUS_UPDATE_INTERVAL_MS;
-  if (!_busEverRequested || millis() - _lastBusRequest > interval)
-    requestBus();
 
   _display->drawStandbyScreen(busView());
 }

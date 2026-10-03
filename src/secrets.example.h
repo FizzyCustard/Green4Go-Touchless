@@ -14,13 +14,18 @@
 #define TFL_STOP_ID "YOUR_STOP_ID"
 // Comma separated list of lines to filter, e.g. "36,185", or "" for all.
 #define TFL_FILTER_LINES ""
+// Optional: a free TfL API key (https://api-portal.tfl.gov.uk) gives a much
+// higher rate limit than anonymous use. Not needed for one device.
+// #define TFL_APP_KEY "your-app-key"
 
 // --- WLED Integration ---
 // IP address of your WLED instance
 #define WLED_IP "192.168.1.100"
 
-// --- OTA Updates ---
-// Password for over-the-air uploads. Leave undefined to disable OTA.
-#define OTA_PASSWORD "change-me"
+// --- OTA Updates (optional) ---
+// Uncomment and set a long random password (12+ characters) to enable
+// over-the-air uploads. Anyone on your network with this password can flash
+// the device. Left commented out, OTA is disabled.
+// #define OTA_PASSWORD "use-a-long-random-password"
 
 #endif // SECRETS_H

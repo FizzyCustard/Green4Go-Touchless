@@ -8,7 +8,7 @@
 class BodyStream : public Stream {
 public:
   BodyStream(WiFiClient &client, int size, unsigned long timeoutMs)
-      : _client(client), _left(size) {
+      : _client(client), _left(size), _start(millis()) {
     setTimeout(timeoutMs);
   }
 
@@ -32,12 +32,20 @@ public:
 private:
   WiFiClient &_client;
   int _left; // Bytes still expected, or -1 if unknown
+  unsigned long _start;
   bool _ended = false;
   bool _clean = false;
 
   bool waitForData() {
     if (_ended)
       return false;
+    // Hard cap on the whole body, so a server trickling bytes slower than
+    // the per-read timeout can't hold the network task indefinitely
+    if (millis() - _start > BUS_PARSE_DEADLINE_MS) {
+      _ended = true;
+      setTimeout(0);
+      return false;
+    }
     if (_left == 0 || (!_client.available() && !_client.connected())) {
       _ended = true;
       _clean = true;
@@ -72,10 +80,15 @@ int BusClient::getNextBusSeconds(char *lineOut, size_t lineLen,
     return BUS_OFFLINE;
   }
 
-  char url[128];
+  char url[192];
+#ifdef TFL_APP_KEY
+  int result = snprintf(url, sizeof(url), TFL_API_URL_TEMPLATE "?app_key=%s",
+                        TFL_STOP_ID, TFL_APP_KEY);
+#else
   int result = snprintf(url, sizeof(url), TFL_API_URL_TEMPLATE, TFL_STOP_ID);
+#endif
   if (result < 0 || result >= (int)sizeof(url)) {
-    Serial.println("[Bus] TFL_STOP_ID too long");
+    Serial.println("[Bus] TFL_STOP_ID / TFL_APP_KEY too long");
     return BUS_API_ERROR;
   }
 
@@ -106,16 +119,28 @@ int BusClient::getNextBusSeconds(char *lineOut, size_t lineLen,
   return apiResult;
 }
 
-// Exact match against the comma separated TFL_FILTER_LINES list, so a filter
-// of "136" no longer matches route "36"
-bool BusClient::lineMatchesFilter(const String &lineName) {
-  const char *filter = TFL_FILTER_LINES;
-  if (filter[0] == '\0')
+// Exact match against the comma separated TFL_FILTER_LINES list (so a
+// filter of "136" doesn't match route "36"). No allocations: this runs for
+// every arrival in every response.
+bool BusClient::lineMatchesFilter(const char *lineName) {
+  const char *p = TFL_FILTER_LINES;
+  if (*p == '\0')
     return true;
 
-  String list = String(",") + filter + ",";
-  list.replace(" ", "");
-  return list.indexOf("," + lineName + ",") != -1;
+  size_t len = strlen(lineName);
+  while (*p) {
+    while (*p == ',' || *p == ' ')
+      p++;
+    const char *start = p;
+    while (*p && *p != ',')
+      p++;
+    const char *end = p;
+    while (end > start && end[-1] == ' ')
+      end--;
+    if ((size_t)(end - start) == len && strncmp(start, lineName, len) == 0)
+      return true;
+  }
+  return false;
 }
 
 int BusClient::parseNextArrival(BodyStream &stream, char *lineOut,
@@ -123,27 +148,28 @@ int BusClient::parseNextArrival(BodyStream &stream, char *lineOut,
   int minSeconds = -1;
   int secondSeconds = -1;
   int iterations = 0;
-  unsigned long started = millis();
+  // One spare byte so an over-long name is detectable, plus the terminator
+  char lineName[MAX_LINE_NAME_LENGTH + 2];
 
   // TfL returns an unsorted array of arrival objects. Scan for
   // "lineName":"X" followed by "timeToStation":Y and keep the smallest.
   // find() returns false at end of body (or on a stall), which ends the
   // loop. Don't gate on available(): it can read 0 mid-response while the
   // next TLS record is still arriving.
-  while (iterations < MAX_JSON_ITERATIONS &&
-         millis() - started < BUS_PARSE_DEADLINE_MS &&
-         stream.find("\"lineName\":")) {
+  while (iterations < MAX_JSON_ITERATIONS && stream.find("\"lineName\":")) {
     iterations++;
 
     if (!stream.find("\""))
       break;
-    String lineName = stream.readStringUntil('"');
+    // Bounded read: never grows past the buffer, whatever the server sends
+    size_t n = stream.readBytesUntil('"', lineName, sizeof(lineName) - 1);
+    lineName[n] = '\0';
 
     if (!stream.find("\"timeToStation\":"))
       break;
     int seconds = stream.parseInt();
 
-    if (lineName.length() == 0 || lineName.length() > MAX_LINE_NAME_LENGTH)
+    if (n == 0 || n > MAX_LINE_NAME_LENGTH)
       continue;
     if (seconds < 0 || seconds > MAX_BUS_TIME_SECONDS)
       continue;
@@ -155,7 +181,7 @@ int BusClient::parseNextArrival(BodyStream &stream, char *lineOut,
       secondSeconds = minSeconds;
       minSeconds = seconds;
       if (lineLen > 0) {
-        strncpy(lineOut, lineName.c_str(), lineLen - 1);
+        strncpy(lineOut, lineName, lineLen - 1);
         lineOut[lineLen - 1] = '\0';
       }
     } else if (secondSeconds == -1 || seconds < secondSeconds) {

@@ -8,10 +8,7 @@
 #define C_DARK_RED 0x8000
 #define C_LIGHT_RED 0xF800
 #define C_ORANGE 0xFD20
-#define C_YELLOW 0xFFE0
 #define C_GREEN 0x07E0
-#define C_DIM_GREEN 0x01E0
-#define C_PINK 0xF81F
 
 #define C_WHITE 0xFFFF
 #define C_BLACK 0x0000
@@ -23,7 +20,6 @@
 #define C_NEON_YELLOW 0xFFE0  // Bright Yellow
 
 // Greys
-#define G_0 0x1082
 #define G_1 0x2104          // Menu Item 1 inactive
 #define G_2 0x3186          // Menu Item 2 inactive
 #define G_3 0x4208          // Menu Item 3 inactive
