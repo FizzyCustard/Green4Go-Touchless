@@ -511,10 +511,10 @@ void StateManager::endBusEffect() {
 }
 
 // A manual Lights choice wins over any running effect: drop the effect's
-// claim on the strip and its saved state, so nothing "restores" over it later
+// claim on the strip and its saved state, so nothing "restores" over it later.
+// Always discard, even with no effect running: WledClient keeps a state whose
+// restore failed, and that copy would otherwise resurface after this choice.
 void StateManager::takeBackLights() {
-  if (_wledOwner == WLED_NONE)
-    return;
   _networkManager->requestWledDiscardSaved();
   _wledOwner = WLED_NONE;
 }
