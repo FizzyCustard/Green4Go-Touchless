@@ -1,32 +1,41 @@
 # TfL Arrivals API JSON Structure
 
-Endpoint: `https://api.tfl.gov.uk/StopPoint/{id}/Arrivals`
+Endpoint: `https://api.tfl.gov.uk/StopPoint/{stopId}/Arrivals` (optionally `?app_key=...`).
 
-The payload returned is an un-keyed Array `[]` containing multiple dictionary objects `{}`. 
-We search locally for `"lineName":"X"` and `"timeToStation":Y`.
+The body is an unsorted JSON array of arrival objects. The parser only reads `"lineName"` (string) and the `"timeToStation"` (integer) that follows it in the same object. Everything else is skipped by `find()`.
 
-## Example Snippet
+## Example (values are made up)
 ```json
 [
   {
-    "id": "1809206583",
+    "$type": "Tfl.Api.Presentation.Entities.Prediction, Tfl.Api.Presentation.Entities",
+    "id": "-1234567890",
     "operationType": 1,
-    "vehicleId": "SK19FDO",
-    "naptanId": "490008435E",
-    "stationName": "Islington Green",
-    "lineId": "19",
-    "lineName": "19",
-    "platformName": "B",
+    "vehicleId": "AB12CDE",
+    "naptanId": "490000000X",
+    "stationName": "Example Street",
+    "lineId": "999",
+    "lineName": "999",
+    "platformName": "X",
     "direction": "outbound",
-    "destinationName": "Finsbury Park",
-    "timeToStation": 234, 
+    "destinationName": "Example Terminus",
+    "timestamp": "2026-01-01T08:00:00.000Z",
+    "timeToStation": 234,
     "currentLocation": "",
-    "towards": "Highbury Or Finsbury Park"
+    "towards": "Example Terminus",
+    "expectedArrival": "2026-01-01T08:03:54Z"
   },
   {
-    "id": "1809206584",
+    "lineName": "998",
+    "timeToStation": 61,
     ...
   }
 ]
 ```
-Note: `timeToStation` is returned in **SECONDS**, but the UI displays **MINUTES**. It is critical that your parser divides the lowest found integer by `60` before returning it to the `StateManager`.
+
+## Notes
+- `timeToStation` is in **seconds**. `BusClient` returns seconds; `StateManager` converts to minutes for display (`remainingSeconds / 60`, counted down locally from the fetch time).
+- The array is **not sorted** by time; the parser scans every entry (up to `MAX_JSON_ITERATIONS` = 200) and keeps the two smallest.
+- `lineName` must precede `timeToStation` within each object for the sequential `find()` approach to pair them correctly.
+- An empty array `[]` (e.g. at night) is a valid response: it parses cleanly and gives `BUS_NO_BUSES`.
+- Find a stop's `naptanId` on tfl.gov.uk and put it in `TFL_STOP_ID` in `src/secrets.h` (never in tracked files).
