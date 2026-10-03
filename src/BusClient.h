@@ -6,20 +6,24 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
+class BodyStream;
+
 class BusClient {
 public:
   BusClient();
   void begin();
 
-  // Returns time to next bus in minutes, or -1 if error/no bus
-  int getNextBusTime();
+  // Returns seconds until the next matching bus, or a negative BUS_* status
+  // code. The route of that bus is copied into lineOut, and the seconds
+  // until the one after it into secondOut (-1 if there isn't one).
+  int getNextBusSeconds(char *lineOut, size_t lineLen, int &secondOut);
 
 private:
   WiFiClientSecure _secureClient;
 
-  // Stream parser helper
-  // Returns minutes to arrival
-  int parseNextArrival(Stream &stream);
+  int parseNextArrival(BodyStream &stream, char *lineOut, size_t lineLen,
+                       int &secondOut);
+  static bool lineMatchesFilter(const String &lineName);
 };
 
 #endif

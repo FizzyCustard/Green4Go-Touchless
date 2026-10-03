@@ -1,5 +1,6 @@
 #include "DistanceSensor.h"
 #include "Config.h"
+
 DistanceSensor::DistanceSensor(int trigPin, int echoPin) {
   // Validate pin numbers
   if (trigPin < 0 || trigPin > MAX_ESP32_PIN || echoPin < 0 ||
@@ -12,7 +13,10 @@ DistanceSensor::DistanceSensor(int trigPin, int echoPin) {
     _echoPin = echoPin;
   }
   _smoothedDist = -1.0;
-  _lastZoneIdx = -1;
+  _rawCount = 0;
+  _rawIdx = 0;
+  _lastValid = -1.0;
+  _missCount = 0;
 }
 
 void DistanceSensor::begin() {
@@ -25,29 +29,56 @@ void DistanceSensor::begin() {
   pinMode(_echoPin, INPUT);
 }
 
-void DistanceSensor::update() {
-  float dist = readDistance();
-
-  if (dist < 0) {
-    // Timeout/Infinity. Start moving smoothed towards a "far" value.
-    // Let's say 100cm is "far enough" to be outside interaction.
-    dist = 100.0;
+static float median3(float a, float b, float c) {
+  if (a > b) {
+    float t = a;
+    a = b;
+    b = t;
   }
+  if (b > c)
+    b = c;
+  return (a > b) ? a : b;
+}
+
+void DistanceSensor::update() {
+  float raw = readDistance();
+
+  // HC-SR04s drop the odd echo even with a hand held still. Bridge short
+  // runs of misses with the last good reading; only a sustained miss means
+  // the hand has really gone, and then we treat it as "far" so the cursor
+  // slides out of the zones
+  float dist;
+  if (raw >= 0) {
+    _missCount = 0;
+    _lastValid = raw;
+    dist = raw;
+  } else if (_missCount < SENSOR_MAX_MISSES && _lastValid >= 0) {
+    _missCount++;
+    dist = _lastValid;
+  } else {
+    dist = SENSOR_FAR_CM;
+  }
+
+  // Median of the last 3 readings drops single-sample spikes (stray echoes)
+  // before they reach the EMA, which would otherwise smear them out
+  _raw[_rawIdx] = dist;
+  _rawIdx = (_rawIdx + 1) % 3;
+  if (_rawCount < 3)
+    _rawCount++;
+  float filtered =
+      (_rawCount < 3) ? dist : median3(_raw[0], _raw[1], _raw[2]);
 
   // EMA Smoothing
   if (_smoothedDist < 0) {
-    _smoothedDist = dist;
+    _smoothedDist = filtered;
   } else {
-    _smoothedDist = (EMA_ALPHA * dist) + ((1.0 - EMA_ALPHA) * _smoothedDist);
+    _smoothedDist =
+        (EMA_ALPHA * filtered) + ((1.0 - EMA_ALPHA) * _smoothedDist);
   }
 
-  // Debug (Viewable if USB connected)
-  // Raw might be -1.0 (Timeout)
-  if (Serial) {
-    Serial.printf("Sensor - Raw: %.2f, Smoothed: %.2f\n",
-                  (dist == 100.0 && readDistance() < 0) ? -1.0 : dist,
-                  _smoothedDist);
-  }
+#if DEBUG_SENSOR
+  Serial.printf("Sensor - Raw: %.2f, Smoothed: %.2f\n", raw, _smoothedDist);
+#endif
 }
 
 float DistanceSensor::readDistance() {
@@ -62,7 +93,9 @@ float DistanceSensor::readDistance() {
   delayMicroseconds(10);
   digitalWrite(_trigPin, LOW);
 
-  long duration = pulseIn(_echoPin, HIGH, 30000); // 30ms timeout
+  // Capped at ~2m: interaction tops out at 30cm, and a shorter wait keeps
+  // the main loop (and animations) moving when nothing is in front
+  long duration = pulseIn(_echoPin, HIGH, SENSOR_ECHO_TIMEOUT_US);
   if (duration == 0)
     return -1.0;
 
@@ -78,14 +111,3 @@ float DistanceSensor::readDistance() {
 }
 
 float DistanceSensor::getSmoothedDistance() { return _smoothedDist; }
-
-// Logic to determine which "slot" or "zone" is active based on total items
-// Usable range is 0 to 15cm.
-// Anything > 15cm is "Base" (Index -1 or totalItems)
-int DistanceSensor::getActiveZone() {
-  // This method might need to be context-aware (how many items?)
-  // But for raw zone logic consistent with previous code, let's just expose the
-  // distance and let StateManager assume the mapping? Or we provide a helper:
-  return -1; // Placeholder, usage will be in StateManager mostly via
-             // getSmoothedDistance
-}

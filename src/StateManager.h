@@ -2,6 +2,7 @@
 #define STATE_MANAGER_H
 
 #include "BusClient.h"
+#include "Config.h"
 #include "DisplayManager.h"
 #include "DistanceSensor.h"
 #include "NetworkManager.h"
@@ -19,6 +20,10 @@ enum AppState {
   SHOWING_API_ERROR
 };
 
+// Who currently "owns" the WLED strip. Whoever takes it from NONE saves the
+// user's state first; handing back to NONE restores it.
+enum WledOwner { WLED_NONE, WLED_BUS, WLED_LEAVE };
+
 class StateManager {
 public:
   StateManager(DistanceSensor *sensor, DisplayManager *display);
@@ -33,47 +38,80 @@ private:
   NetworkManager *_networkManager;
 
   AppState _currentState;
+  unsigned long _stateEnteredAt;
 
   // Selection Logic
-  int _currentZoneIdx;
-  int _lastZoneIdx;
+  int _rawZone;                // Zone under the hand last tick (hysteresis)
+  int _lastZoneIdx;            // Row being dwelled on
   unsigned long _zoneStartTime;
+  bool _armed;                 // Cleared by a selection until the hand moves
+  int _rearmRow;               // Row the hand was on when disarmed
+  float _disarmDist;           // Hand distance when disarmed
 
   // Standby & Power Logic
   unsigned long _lastInteractionTime;
-  unsigned long _lastBusUpdate;
-  unsigned long _busEffectStartTime;
-  unsigned long _successStartTime;
-  unsigned long _errorDisplayTimer;
-  unsigned long _ignoreInputUntil;
-  int _cachedBusMinutes = -1;
+  unsigned long _busEffectStartTime; // When the bus colour effect started
+  WledOwner _wledOwner;
+  unsigned long _lastPresenceTime; // For display sleep
+  bool _leaveAlertActive;
 
-  // Unlock Logic
-  unsigned long _unlockStartTime;
-  bool _unlocking;
+  // Bus data. Stored as "seconds at fetch time" so the display can count
+  // down locally between fetches.
+  int _busSeconds;          // >= 0 valid, otherwise a BUS_* code
+  int _busSecond;           // Seconds to the bus after that, or -1
+  unsigned long _busAt;     // millis() when _busSeconds was fetched
+  char _busLine[MAX_LINE_NAME_LENGTH + 1];
+  bool _lastBusResultOk;
+  bool _busEverRequested;
+  unsigned long _lastBusRequest;
 
   // Timer State
   unsigned long _timerStartTime;
   bool _timerRunning;
   bool _timerMenuVisible;
+  bool _timerMenuArmed; // Hand must leave once before the menu can open
 
   // Helpers
-  int calculateZone(float dist, int numItems);
-  void handleSelection(int index);
-  void resetSelectionTimer();
+  static bool isInteractive(AppState s);
+  void goToState(AppState s);
+  int calculateZone(float dist, int numZones, int prevZone);
+  void disarm();
   void resetStandbyTimer();
   void checkStandbyTimeout();
+  void handleSelection(int row);
+
+  // Bus helpers
+  void requestBus();
+  void pollBusResult();
+  void applyBusResult(int seconds, int second, unsigned long at,
+                      const char *line);
+  int busMinutes();
+  long remainingSeconds(int fetchedSeconds);
+  BusView busView();
+  void enterBusScreen();
+  bool startBusEffect();
+  void endBusEffect();
+  void takeBackLights();
+
+  // Leave-now alert & display sleep
+  bool inLeaveAlertHours();
+  int leaveAlertMinutes();
+  bool busNearLeaveWindow();
+  void updateLeaveAlert();
+  void updateDisplaySleep(float dist);
 
   // Actions
-  void actionMainMenu(int index);
-  void actionTimer(int index);
-  void actionLights(int index);
-  void actionBusTimes(int index);
+  void actionMainMenu(int row);
+  void actionTimer(int row);
+  void actionLights(int row);
+  void actionBusTimes(int row);
 
   // State Handlers
   void updateWarmup();
-  void updateStandby();
-  void updateUnlock();
+  void updateStandby(float dist);
+  void updateUnlock(float dist);
+  void updateInteractive(float dist);
+  bool updateTimerMenu(float dist);
 };
 
 #endif
