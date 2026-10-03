@@ -6,8 +6,8 @@
 // src/secrets.h is gitignored so your details stay out of the repo.
 
 // WiFi Credentials
-static const char *WIFI_SSID = "your-wifi-name";
-static const char *WIFI_PASS = "your-wifi-password";
+#define WIFI_SSID "your-wifi-name"
+#define WIFI_PASS "your-wifi-password"
 
 // --- TfL Bus API ---
 // Find your stop ID at https://tfl.gov.uk/ (e.g. "490000000X")
@@ -18,5 +18,9 @@ static const char *WIFI_PASS = "your-wifi-password";
 // --- WLED Integration ---
 // IP address of your WLED instance
 #define WLED_IP "192.168.1.100"
+
+// --- OTA Updates ---
+// Password for over-the-air uploads. Leave undefined to disable OTA.
+#define OTA_PASSWORD "change-me"
 
 #endif // SECRETS_H

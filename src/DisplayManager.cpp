@@ -1,4 +1,5 @@
 #include "DisplayManager.h"
+#include "Config.h"
 #include <math.h>
 #include <string.h>
 
@@ -6,459 +7,717 @@
 #define PI 3.14159265358979323846
 #endif
 
+// Unlock ring geometry
+#define RING_CX 120
+#define RING_CY 120
+#define RING_OUTER 70
+#define RING_INNER 58
+
+// Timer layout
+#define TIMER_BAND_H 60
+#define TIMER_TEXT_SIZE 5
+
+#define DWELL_BAR_H 6
+#define TEXT_MAX_W 228 // Leave a 6px margin either side
+
+// Hand-position cursor: a marker riding a rail down the right-hand gutter
+#define CURSOR_H 14
+#define CURSOR_EASE 0.35f // Fraction of the remaining distance per frame
+#define RAIL_W 2
+
+// Backlight PWM
+#define BL_CHANNEL 0
+#define BL_FREQ 5000
+#define BL_BITS 8
+#define BL_ON 255
+
+// OTA progress bar
+#define OTA_BAR_X 20
+#define OTA_BAR_Y 150
+#define OTA_BAR_W 200
+#define OTA_BAR_H 16
+
+static const char *STANDBY_HINT = "Hold close to wake";
+#define STANDBY_HINT_SIZE 2
+#define STANDBY_HINT_Y 272
+#define BREATH_PERIOD_MS 3000
+#define BREATH_MIN 40
+#define BREATH_MAX 170
+
+static uint16_t grey565(uint8_t level) {
+  return ((level & 0xF8) << 8) | ((level & 0xFC) << 3) | (level >> 3);
+}
+
 DisplayManager::DisplayManager(int sck, int mosi, int dc, int cs, int rst,
                                int bl) {
   _blPin = bl;
   _bus = new Arduino_ESP32SPI(dc, cs, sck, mosi, GFX_NOT_DEFINED);
   _gfx = new Arduino_ST7789(_bus, rst, 0, true, 240, 320);
-
-  // Initialize cache
-  memset(_lastTimerStr, 0, 9);
-  _lastTimerY = -1;
-  _lastBusMinutes = -100;
-  _lastStandbyMinutes = -100;
 }
 
 void DisplayManager::begin() {
   _gfx->begin();
-  pinMode(_blPin, OUTPUT);
-  digitalWrite(_blPin, HIGH);
+  _gfx->setTextWrap(false);
+  // Clear before the backlight comes on so stale panel RAM never shows
   _gfx->fillScreen(C_BLACK);
-
-  // Draw initial base
-  updateBaseZone(false);
+  // PWM so sleep and wake can fade rather than snap
+  ledcSetup(BL_CHANNEL, BL_FREQ, BL_BITS);
+  ledcAttachPin(_blPin, BL_CHANNEL);
+  ledcWrite(BL_CHANNEL, BL_ON);
+  _blLevel = _blTarget = BL_ON;
 }
 
-DisplayManager::~DisplayManager() {
-  // Clean up dynamically allocated graphics objects
-  if (_gfx) {
-    delete _gfx;
-    _gfx = nullptr;
+// --- Helpers ---
+
+// Returns true the first time a screen is shown, so callers know to do a
+// full draw. Resets all per-screen caches.
+bool DisplayManager::enterScreen(Screen s) {
+  if (_screen == s)
+    return false;
+  _screen = s;
+  _activeRow = -10;
+  _dwellRow = -1;
+  _dwellW = 0;
+  _animating = false;
+
+  // Interactive screens keep a gutter on the right for the hand cursor and
+  // paint their content to the left of it
+  bool gutter = (s == SCR_MAIN || s == SCR_LIGHTS || s == SCR_TIMER ||
+                 s == SCR_BUS || s == SCR_MESSAGE);
+  if (gutter && _paintW == SCREEN_W) {
+    _gfx->fillRect(SCREEN_W - GUTTER_W, 0, GUTTER_W, BASE_Y + BASE_H, C_BLACK);
+    _gfx->fillRect(SCREEN_W - GUTTER_W / 2 - RAIL_W / 2, 0, RAIL_W,
+                   BASE_Y + BASE_H, G_1);
   }
-  if (_bus) {
-    delete _bus;
-    _bus = nullptr;
+  if (gutter != (_paintW != SCREEN_W)) {
+    _cursorPos = -1;
+    _cursorDrawnY = -1;
+    _cursorTarget = -1;
   }
+  _paintW = gutter ? SCREEN_W - GUTTER_W : SCREEN_W;
+  return true;
 }
 
-void DisplayManager::clearContentArea() {
-  _gfx->fillRect(0, 0, 240, 240, C_BLACK);
-  _lastActiveIndex = -10; // Force redraw of menus
+// Black text on bright backgrounds, white on dark ones
+uint16_t DisplayManager::contrastColor(uint16_t bg) {
+  uint32_t r = ((bg >> 11) & 0x1F) << 3;
+  uint32_t g = ((bg >> 5) & 0x3F) << 2;
+  uint32_t b = (bg & 0x1F) << 3;
+  uint32_t lum = (299 * r + 587 * g + 114 * b) / 1000;
+  return lum > 140 ? C_BLACK : C_WHITE;
 }
 
-void DisplayManager::updateBaseZone(bool active) {
-  if (_lastBaseActive == active)
+// Largest built-in font size (6px * size per char) that fits maxWidth
+uint8_t DisplayManager::fitTextSize(size_t len, uint8_t maxSize,
+                                    int maxWidth) {
+  for (uint8_t s = maxSize; s > 1; s--) {
+    if ((int)(6 * s * len) <= maxWidth)
+      return s;
+  }
+  return 1;
+}
+
+void DisplayManager::fillRectClipped(int x, int y, int w, int h,
+                                     uint16_t color, int clipTop,
+                                     int clipBottom) {
+  if (y < clipTop) {
+    h -= clipTop - y;
+    y = clipTop;
+  }
+  if (y + h > clipBottom)
+    h = clipBottom - y;
+  if (w <= 0 || h <= 0)
+    return;
+  _gfx->fillRect(x, y, w, h, color);
+}
+
+// Flicker-free text: paints the band around the text box, then draws the
+// text opaquely, so every pixel is written exactly once. Nothing ever
+// flashes through black on its way to the new content.
+void DisplayManager::drawTextInBand(const char *text, uint8_t size, int bandY,
+                                    int bandH, uint16_t fg, uint16_t bg,
+                                    int clipBottom) {
+  int len = strlen(text);
+  int tw = 6 * size * len;
+  int th = 8 * size;
+  if (tw > _paintW)
+    tw = _paintW;
+  int tx = (_paintW - tw) / 2;
+  int ty = bandY + (bandH - th) / 2;
+  int bandBottom = bandY + bandH;
+
+  fillRectClipped(0, bandY, _paintW, ty - bandY, bg, 0, clipBottom);
+  fillRectClipped(0, ty + th, _paintW, bandBottom - (ty + th), bg, 0,
+                  clipBottom);
+  fillRectClipped(0, ty, tx, th, bg, 0, clipBottom);
+  fillRectClipped(tx + tw, ty, _paintW - (tx + tw), th, bg, 0, clipBottom);
+
+  int visibleBottom = min(bandBottom, clipBottom);
+  if (len == 0 || ty >= visibleBottom)
     return;
 
-  uint16_t color = active ? G_BASE_LIGHT : G_BASE_DARK;
-  // Base is 240 to 320
-  _gfx->fillRect(0, 240, 240, 80, color);
-  _lastBaseActive = active;
-}
-
-void DisplayManager::drawMenuItem(int y, int h, const char *label, bool active,
-                                  uint16_t activeColor,
-                                  uint16_t inactiveColor) {
-  int maxY = 240;
-
-  if (y >= maxY)
-    return; // Completely hidden
-
-  int effectiveH = h;
-  if (y + h > maxY) {
-    effectiveH = maxY - y;
+  // The font clips whole scaled pixels, so pre-fill any partial glyph row
+  // at the clip edge (only happens while the menu is sliding)
+  int visible = visibleBottom - ty;
+  if (visible < th && visible % size) {
+    _gfx->fillRect(tx, visibleBottom - visible % size, tw, visible % size, bg);
   }
 
-  uint16_t color = active ? activeColor : inactiveColor;
-  _gfx->fillRect(0, y, 240, effectiveH, color);
-
-  // Text
-  _gfx->setTextColor(C_WHITE);
-  _gfx->setTextSize(3);
-
-  int16_t x1, y1;
-  uint16_t w, h_text;
-  _gfx->getTextBounds(label, 0, 0, &x1, &y1, &w, &h_text);
-
-  int xPos = (240 - w) / 2;
-  int yPos = y + (h - h_text) / 2;
-
-  if (yPos + h_text > maxY) {
-    return;
-  }
-  if (yPos < 0)
-    return;
-
-  _gfx->setCursor(xPos, yPos);
-  _gfx->print(label);
-}
-
-void DisplayManager::drawMainMenu(int activeIndex) {
-  if (activeIndex == _lastActiveIndex)
-    return;
-
-  // 3 Items: Timer, Bus Times, Lights
-  // Each ~80px height
-
-  // Item 0: Timer
-  drawMenuItem(0, 80, "Timer", (activeIndex == 0), C_CYBER_PINK, G_1);
-  // Item 1: Bus Times
-  drawMenuItem(80, 80, "Bus Times", (activeIndex == 1), C_NEON_YELLOW, G_2);
-  // Item 2: Lights
-  drawMenuItem(160, 80, "Lights", (activeIndex == 2), C_CYBER_BLUE, G_3);
-
-  _lastActiveIndex = activeIndex;
-}
-
-void DisplayManager::drawBusScreen(int minutes, int activeIndex) {
-  if (minutes == _lastBusMinutes && activeIndex == _lastActiveIndex)
-    return;
-
-  _lastBusMinutes = minutes;
-  _lastActiveIndex = activeIndex;
-
-  // Background based on time (Top 2/3rds)
-  uint16_t bgColor = C_BLACK;
-  uint16_t txtColor = C_WHITE;
-
-  if (minutes < 0) {
-    bgColor = G_1; // Grey for unknown
-  } else if (minutes <= 5 || minutes > 12) {
-    bgColor = C_DARK_RED;
-  } else if (minutes >= 6 && minutes <= 9) {
-    // 6-9 mins: Green (Comfortable)
-    bgColor = C_GREEN;
-    txtColor = C_BLACK; // Green is bright, use black text
-  } else {
-    bgColor = C_ORANGE;
-    txtColor = C_BLACK;
-  }
-
-  // Draw Bus Info Area (Top 160px)
-  _gfx->fillRect(0, 0, 240, 160, bgColor);
-
-  _gfx->setTextColor(txtColor, bgColor);
-  _gfx->setTextSize(4);
-
-  String text;
-  if (minutes == -1)
-    text = "Loading...";
-  else if (minutes == -3)
-    text = "No Buses";
-  else if (minutes < 0)
-    text = "No Data";
-  else if (minutes == 0)
-    text = "Due";
-  else
-    text = String(minutes) + " min";
-
-  int16_t x1, y1;
-  uint16_t w, h;
-  _gfx->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
-
-  // Center in top 160px
-  _gfx->setCursor((240 - w) / 2, (160 - h) / 2);
+  _gfx->setTextBound(0, 0, _paintW, visibleBottom);
+  _gfx->setTextSize(size);
+  _gfx->setTextColor(fg, bg);
+  _gfx->setCursor(tx, ty);
   _gfx->print(text);
-
-  // Draw Back Button (Bottom 80px)
-  drawMenuItem(160, 80, "Back", (activeIndex == 0), C_CYBER_PURPLE, G_2);
+  _gfx->setTextBound(0, 0, SCREEN_W, BASE_Y + BASE_H);
 }
 
-void DisplayManager::drawSuccessScreen(const char *message) {
-  _gfx->fillScreen(C_GREEN);
-
-  _gfx->setTextColor(C_BLACK, C_GREEN);
-  _gfx->setTextSize(3);
-
-  int16_t x1, y1;
-  uint16_t w, h;
-  _gfx->getTextBounds(message, 0, 0, &x1, &y1, &w, &h);
-
-  _gfx->setCursor((240 - w) / 2, (240 - h) / 2);
-  _gfx->print(message);
-
-  _lastActiveIndex = -100; // Force redraw
+void DisplayManager::drawRow(int row, const char *label, bool active,
+                             uint16_t activeColor, uint16_t inactiveColor) {
+  uint16_t bg = active ? activeColor : inactiveColor;
+  drawTextInBand(label, 3, row * ROW_H, ROW_H, contrastColor(bg), bg);
+  _rowColor[row] = activeColor;
+  if (row == _dwellRow)
+    _dwellW = 0; // Repaint wiped the bar
 }
 
-void DisplayManager::drawErrorScreen(const char *message) {
-  _gfx->fillScreen(C_DARK_RED);
-
-  _gfx->setTextColor(C_WHITE, C_DARK_RED);
-  _gfx->setTextSize(3);
-
-  int16_t x1, y1;
-  uint16_t w, h;
-  _gfx->getTextBounds(message, 0, 0, &x1, &y1, &w, &h);
-
-  _gfx->setCursor((240 - w) / 2, (240 - h) / 2);
-  _gfx->print(message);
-
-  _lastActiveIndex = -100; // Force redraw
-}
-
-void DisplayManager::drawStandbyScreen(int minutes) {
-  if (minutes == _lastStandbyMinutes && _lastActiveIndex == -98)
+// Repaints only the rows whose highlight changed
+void DisplayManager::drawMenuRows(const char *const labels[NUM_ROWS],
+                                  const uint16_t on[NUM_ROWS],
+                                  const uint16_t off[NUM_ROWS],
+                                  int activeRow) {
+  if (activeRow == _activeRow)
     return;
-  _lastStandbyMinutes = minutes;
-  _lastActiveIndex = -98;
+  bool full = (_activeRow == -10);
+  for (int row = 0; row < NUM_ROWS; row++) {
+    if (!labels[row])
+      continue;
+    if (full || row == activeRow || row == _activeRow)
+      drawRow(row, labels[row], row == activeRow, on[row], off[row]);
+  }
+  _activeRow = activeRow;
+}
 
-  // Passive info
-  _gfx->fillRect(0, 0, 240, 240, C_BLACK);
+// --- Animation tick ---
 
-  // 1. Title: "Coffee Zone Controller"
-  // Cyberpunk Pink, Centered at top
-  _gfx->setTextColor(C_CYBER_PINK, C_BLACK);
-  _gfx->setTextSize(2); // Smaller to fit width? Or 2 lines?
-  // "Coffee Zone"
-  // "Controller"
+void DisplayManager::update() {
+  unsigned long now = millis();
+  if (now - _lastFrame < FRAME_INTERVAL_MS)
+    return;
+  _lastFrame = now;
 
-  int16_t x1, y1;
-  uint16_t w, h;
+  if (_animating && _screen == SCR_TIMER) {
+    float target = _menuTarget ? 1.0f : 0.0f;
+    // Duration scales with distance left, so a reversal mid-slide is quick
+    float dur = fabsf(target - _animFrom) * TIMER_MENU_ANIM_MS;
+    float t = dur > 0 ? (now - _animStart) / dur : 1.0f;
+    if (t >= 1.0f) {
+      t = 1.0f;
+      _animating = false;
+    }
+    float eased = 1.0f - powf(1.0f - t, 3); // easeOutCubic
+    _openness = _animFrom + (target - _animFrom) * eased;
+    renderTimerFrame(_openness);
+    if (!_animating)
+      _activeRow = -10; // Let the next draw apply the hover state
+  }
 
-  const char *line1 = "COFFEE ZONE";
-  const char *line2 = "CONTROLLER";
+  // Backlight fade
+  if (_blLevel != _blTarget) {
+    float t = (now - _blFadeStart) / (float)BACKLIGHT_FADE_MS;
+    if (t >= 1.0f)
+      t = 1.0f;
+    _blLevel = _blFrom + (int)((_blTarget - _blFrom) * t);
+    ledcWrite(BL_CHANNEL, _blLevel);
+  }
 
-  _gfx->getTextBounds(line1, 0, 0, &x1, &y1, &w, &h);
-  _gfx->setCursor((240 - w) / 2, 40);
-  _gfx->print(line1);
+  // Hand cursor glides towards its target rather than jumping per tick
+  if (_paintW != SCREEN_W) {
+    if (_cursorTarget < 0) {
+      _cursorPos = -1;
+    } else if (_cursorPos < 0) {
+      _cursorPos = _cursorTarget;
+    } else {
+      _cursorPos += (_cursorTarget - _cursorPos) * CURSOR_EASE;
+    }
+    int y = (_cursorPos < 0) ? -1 : (int)lroundf(_cursorPos);
+    if (y != _cursorDrawnY)
+      drawCursorAt(y);
+  }
 
-  _gfx->getTextBounds(line2, 0, 0, &x1, &y1, &w, &h);
-  _gfx->setCursor((240 - w) / 2, 40 + h + 5);
-  _gfx->print(line2);
+  if (_screen == SCR_STANDBY && _blTarget > 0) {
+    // Slow "breathing" hint so the idle screen feels alive
+    float phase = (now % BREATH_PERIOD_MS) / (float)BREATH_PERIOD_MS;
+    float b = 0.5f - 0.5f * cosf(2.0f * PI * phase);
+    uint16_t c = grey565(BREATH_MIN + (uint8_t)(b * (BREATH_MAX - BREATH_MIN)));
+    if (c != _breathColor)
+      drawStandbyHint(c);
+  }
+}
 
-  // 2. Bus Time Underneath
-  _gfx->setTextColor(C_CYBER_BLUE, C_BLACK);
-  _gfx->setTextSize(4); // Make it big
+// --- Screens ---
 
-  String busText = "";
-  if (minutes < 0)
-    busText = "--";
+void DisplayManager::drawBootScreen() {
+  if (!enterScreen(SCR_BOOT))
+    return;
+
+  _gfx->fillScreen(C_BLACK);
+  _baseState = -1;
+
+  // Splash Screen: 3 Rotated Rectangles (W=30, H=145, -13 deg)
+  int16_t w = 30;
+  int16_t h = 145;
+  float angle = -13.0;
+  fillRotatedRect(46, 86, w, h, angle, C_WHITE);
+  fillRotatedRect(94, 86, w, h, angle, C_WHITE);
+  fillRotatedRect(142, 86, w, h, angle, C_WHITE);
+}
+
+void DisplayManager::drawStandbyHint(uint16_t color) {
+  _breathColor = color;
+  int tw = 6 * STANDBY_HINT_SIZE * strlen(STANDBY_HINT);
+  _gfx->setTextSize(STANDBY_HINT_SIZE);
+  _gfx->setTextColor(color, C_BLACK);
+  _gfx->setCursor((SCREEN_W - tw) / 2, STANDBY_HINT_Y);
+  _gfx->print(STANDBY_HINT);
+}
+
+void DisplayManager::drawStandbyScreen(const BusView &bus) {
+  Screen prev = _screen;
+  if (enterScreen(SCR_STANDBY)) {
+    if (prev == SCR_UNLOCK) {
+      // Cancelled unlock: the hint strip is still showing, so just erase the
+      // ring. The bands below repaint everything else without a full clear.
+      _gfx->fillArc(RING_CX, RING_CY, RING_OUTER, RING_INNER, 0, 360,
+                    C_BLACK);
+    } else {
+      _gfx->fillScreen(C_BLACK);
+      _baseState = -1;
+      drawStandbyHint(grey565(BREATH_MIN));
+    }
+    drawTextInBand("COFFEE ZONE", 2, 24, 22, C_CYBER_PINK, C_BLACK);
+    drawTextInBand("CONTROLLER", 2, 46, 22, C_CYBER_PINK, C_BLACK);
+    // Impossible values, so the dynamic bands below all paint
+    strcpy(_sbLabel, "\x01");
+    strcpy(_sbBus, "\x01");
+    strcpy(_sbStatus, "\x01");
+  }
+
+  char label[20];
+  char main[20];
+  char status[20] = "";
+  uint16_t labelColor = G_TEXT_DIM;
+  uint16_t mainColor = C_CYBER_BLUE;
+  uint16_t statusColor = C_LIGHT_RED;
+
+  if (bus.leaveNow) {
+    snprintf(label, sizeof(label), "LEAVE NOW");
+    labelColor = C_GREEN;
+  } else if (bus.minutes >= 0 && bus.line && bus.line[0]) {
+    snprintf(label, sizeof(label), "NEXT %s", bus.line);
+  } else {
+    snprintf(label, sizeof(label), "NEXT BUS");
+  }
+
+  // While alerting, show the bus you're leaving for (may be the second one)
+  int shown = bus.leaveNow ? bus.alertMinutes : bus.minutes;
+  if (bus.leaveNow)
+    mainColor = C_GREEN;
+  if (shown == 0)
+    snprintf(main, sizeof(main), "Due");
+  else if (shown > 0)
+    snprintf(main, sizeof(main), "%d min", shown);
+  else if (shown == BUS_NO_BUSES)
+    snprintf(main, sizeof(main), "No buses");
   else
-    busText = String(minutes) + "m";
+    snprintf(main, sizeof(main), "--");
 
-  _gfx->getTextBounds(busText, 0, 0, &x1, &y1, &w, &h);
-  int busY = 140; // Approx center lower half
-  _gfx->setCursor((240 - w) / 2, busY);
-  _gfx->print(busText);
+  if (!bus.online) {
+    snprintf(status, sizeof(status), "No WiFi");
+  } else if (bus.minutes == BUS_API_ERROR) {
+    snprintf(status, sizeof(status), "TfL unavailable");
+  } else if (!bus.leaveNow && bus.minutes >= 0 && bus.secondMinutes >= 0) {
+    snprintf(status, sizeof(status), "then %d min", bus.secondMinutes);
+    statusColor = G_TEXT_DIM;
+  }
 
-  // label for bus
-  _gfx->setTextSize(2);
-  const char *label = "NEXT BUS";
-  _gfx->getTextBounds(label, 0, 0, &x1, &y1, &w, &h);
-  _gfx->setCursor((240 - w) / 2, busY - h - 5);
-  _gfx->setTextColor(G_2, C_BLACK); // Dimmer
-  _gfx->print(label);
+  if (strcmp(label, _sbLabel) != 0) {
+    strcpy(_sbLabel, label);
+    drawTextInBand(label, 2, 100, 24, labelColor, C_BLACK);
+  }
+  if (strcmp(main, _sbBus) != 0 || mainColor != _sbBusColor) {
+    strcpy(_sbBus, main);
+    _sbBusColor = mainColor;
+    drawTextInBand(main, fitTextSize(strlen(main), 5, TEXT_MAX_W), 124, 60,
+                   mainColor, C_BLACK);
+  }
+  if (strcmp(status, _sbStatus) != 0) {
+    strcpy(_sbStatus, status);
+    drawTextInBand(status, 2, 186, 26, statusColor, C_BLACK);
+  }
 }
 
 void DisplayManager::drawUnlockVisual(float progress) {
-  // Draw a circle that grows
-  // Progress 0.0 to 1.0
-  int maxRadius = 100;
-  int radius = (int)(maxRadius * progress);
-
-  uint16_t color = C_GREEN;
-
-  if (progress < 0.1) {
-    // Clear screen logic if just starting?
-    // Assuming this is called over Standby screen.
-    // We might want to just draw the circle.
+  if (enterScreen(SCR_UNLOCK)) {
+    _gfx->fillRect(0, 0, SCREEN_W, CONTENT_H, C_BLACK);
+    // Label first: its band is full width and would cut into the ring
+    drawTextInBand("Hold", 3, RING_CY - 20, 40, C_WHITE, C_BLACK);
+    _gfx->fillArc(RING_CX, RING_CY, RING_OUTER, RING_INNER, 0, 360, G_1);
+    _unlockAngle = 0;
   }
 
-  _gfx->fillCircle(120, 120, radius, color);
-
-  // If full, maybe flash white?
-}
-
-void DisplayManager::drawTimerScreen(int activeIndex, bool menuVisible) {
-  if (!menuVisible) {
-    return;
-  }
-  if (activeIndex == _lastActiveIndex)
+  if (progress < 0)
+    progress = 0;
+  if (progress > 1)
+    progress = 1;
+  float target = progress * 360.0f;
+  if (target - _unlockAngle < 1.0f)
     return;
 
-  // Layout: Reset (80-160), Back (160-240)
-  drawMenuItem(80, 80, "Reset", (activeIndex == 0), C_NEON_YELLOW, G_1);
-  drawMenuItem(160, 80, "Back", (activeIndex == 1), C_CYBER_PURPLE, G_2);
-
-  _lastActiveIndex = activeIndex;
-}
-
-void DisplayManager::renderMenuSlider(int offset, const char *item1,
-                                      const char *item2) {
-  int yStart = 240 - offset;
-
-  // Draw Item 1
-  if (yStart < 240) {
-    drawMenuItem(yStart, 80, item1, false, C_NEON_YELLOW, G_1);
+  // Fill the ring clockwise from 12 o'clock, only drawing the new slice.
+  // fillArc is happiest without a 360 wrap, so split there.
+  float s = 270.0f + max(0.0f, _unlockAngle - 1.0f); // 1 deg overlap, no seams
+  float e = 270.0f + target;
+  if (e <= 359.9f) {
+    _gfx->fillArc(RING_CX, RING_CY, RING_OUTER, RING_INNER, s, e, C_GREEN);
+  } else if (s >= 360.0f) {
+    _gfx->fillArc(RING_CX, RING_CY, RING_OUTER, RING_INNER, s - 360, e - 360,
+                  C_GREEN);
+  } else {
+    _gfx->fillArc(RING_CX, RING_CY, RING_OUTER, RING_INNER, s, 359.9f,
+                  C_GREEN);
+    _gfx->fillArc(RING_CX, RING_CY, RING_OUTER, RING_INNER, 0, e - 360,
+                  C_GREEN);
   }
-  // Draw Item 2
-  if (yStart + 80 < 240) {
-    drawMenuItem(yStart + 80, 80, item2, false, C_CYBER_PURPLE, G_2);
+  _unlockAngle = target;
+}
+
+void DisplayManager::drawMainMenu(int activeRow) {
+  enterScreen(SCR_MAIN);
+  static const char *const labels[NUM_ROWS] = {"Timer", "Bus Times",
+                                               "Lights"};
+  static const uint16_t on[NUM_ROWS] = {C_CYBER_PINK, C_NEON_YELLOW,
+                                        C_CYBER_BLUE};
+  static const uint16_t off[NUM_ROWS] = {G_1, G_2, G_3};
+  drawMenuRows(labels, on, off, activeRow);
+}
+
+void DisplayManager::drawLightSettings(int activeRow) {
+  enterScreen(SCR_LIGHTS);
+  static const char *const labels[NUM_ROWS] = {"Rainbow", "Coffee", "Back"};
+  static const uint16_t on[NUM_ROWS] = {C_CYBER_PINK, C_CYBER_BLUE,
+                                        C_CYBER_PURPLE};
+  static const uint16_t off[NUM_ROWS] = {G_1, G_2, G_3};
+  drawMenuRows(labels, on, off, activeRow);
+}
+
+void DisplayManager::drawBusScreen(const BusView &bus, int activeRow) {
+  if (enterScreen(SCR_BUS)) {
+    _busMain[0] = _busSub[0] = '\0';
+    _busBg = 0x0001; // Never a real colour, forces the info row to paint
   }
+
+  // Info row (row 0) colour reflects how good the timing is
+  uint16_t bg;
+  int m = bus.minutes;
+  if (m < 0)
+    bg = G_1;
+  else if (m <= 5 || m > 12)
+    bg = C_DARK_RED;
+  else if (m <= 9)
+    bg = C_GREEN;
+  else
+    bg = C_ORANGE;
+
+  char main[20];
+  char sub[24] = "";
+  if (m == 0)
+    snprintf(main, sizeof(main), "Due");
+  else if (m > 0)
+    snprintf(main, sizeof(main), "%d min", m);
+  else if (m == BUS_NO_BUSES)
+    snprintf(main, sizeof(main), "No buses");
+  else if (m == BUS_OFFLINE && !bus.refreshing)
+    snprintf(main, sizeof(main), "No WiFi");
+  else if (m == BUS_API_ERROR && !bus.refreshing)
+    snprintf(main, sizeof(main), "No data");
+  else
+    snprintf(main, sizeof(main), "Loading...");
+
+  bool hasLine = bus.line && bus.line[0];
+  if (bus.refreshing && m >= 0)
+    snprintf(sub, sizeof(sub), "Updating...");
+  else if (bus.leaveNow)
+    snprintf(sub, sizeof(sub), "LEAVE NOW!");
+  else if (m >= 0 && bus.secondMinutes >= 0 && hasLine)
+    snprintf(sub, sizeof(sub), "%s, then %dm", bus.line, bus.secondMinutes);
+  else if (m >= 0 && bus.secondMinutes >= 0)
+    snprintf(sub, sizeof(sub), "Then %d min", bus.secondMinutes);
+  else if (m >= 0 && hasLine)
+    snprintf(sub, sizeof(sub), "Route %s", bus.line);
+
+  bool bgChanged = (bg != _busBg);
+  _busBg = bg;
+  uint16_t fg = contrastColor(bg);
+  if (bgChanged || strcmp(main, _busMain) != 0) {
+    strcpy(_busMain, main);
+    drawTextInBand(main, fitTextSize(strlen(main), 5, TEXT_MAX_W), 0, 56, fg,
+                   bg);
+  }
+  if (bgChanged || strcmp(sub, _busSub) != 0) {
+    strcpy(_busSub, sub);
+    drawTextInBand(sub, 2, 56, ROW_H - 56, fg, bg);
+  }
+
+  static const char *const labels[NUM_ROWS] = {nullptr, "Refresh", "Back"};
+  static const uint16_t on[NUM_ROWS] = {0, C_CYBER_BLUE, C_CYBER_PURPLE};
+  static const uint16_t off[NUM_ROWS] = {0, G_2, G_3};
+  drawMenuRows(labels, on, off, activeRow);
 }
 
-void DisplayManager::animateTimerMenu(bool opening) {
-  _animating = true;
-  _animOpening = opening;
-  _animStartTime = millis();
-
-  int timerStart = opening ? 120 : 40;
-  int menuStart = opening ? 0 : 160;
-
-  _prevTimerY = timerStart;
-  _prevMenuLimit = 240 - menuStart;
+void DisplayManager::drawSuccessScreen(const char *message) {
+  enterScreen(SCR_MESSAGE);
+  drawTextInBand(message, fitTextSize(strlen(message), 3, TEXT_MAX_W), 0,
+                 CONTENT_H, C_BLACK, C_GREEN);
 }
 
-void DisplayManager::update() {
-  if (!_animating)
+void DisplayManager::drawErrorScreen(const char *message) {
+  enterScreen(SCR_MESSAGE);
+  drawTextInBand(message, fitTextSize(strlen(message), 3, TEXT_MAX_W), 0,
+                 CONTENT_H, C_WHITE, C_DARK_RED);
+}
+
+void DisplayManager::drawDwellProgress(int row, float progress) {
+  if (row != _dwellRow) {
+    // A new row is hovered; it was just repainted so it has no bar yet
+    _dwellRow = row;
+    _dwellW = 0;
+  }
+  if (row < 0 || row >= NUM_ROWS || row != _activeRow || _animating)
     return;
 
-  float durationMs = 1000.0;
-  unsigned long elapsed = millis() - _animStartTime;
-  float progress = (float)elapsed / durationMs;
+  if (progress < 0)
+    progress = 0;
+  if (progress > 1)
+    progress = 1;
+  int w = (int)(progress * _paintW);
+  int y = row * ROW_H + ROW_H - DWELL_BAR_H;
 
-  if (progress >= 1.0) {
-    progress = 1.0;
-    _animating = false;
+  if (w > _dwellW) {
+    _gfx->fillRect(_dwellW, y, w - _dwellW, DWELL_BAR_H,
+                   contrastColor(_rowColor[row]));
+  } else if (w < _dwellW) {
+    _gfx->fillRect(w, y, _dwellW - w, DWELL_BAR_H, _rowColor[row]);
+  }
+  _dwellW = w;
+}
+
+void DisplayManager::updateBaseZone(bool active) {
+  int state = active ? 1 : 0;
+  if (state == _baseState)
+    return;
+  _baseState = state;
+
+  if (active) {
+    drawTextInBand("Closer to select", 2, BASE_Y, BASE_H, C_WHITE,
+                   G_BASE_LIGHT, BASE_Y + BASE_H);
+  } else {
+    _gfx->fillRect(0, BASE_Y, _paintW, BASE_H, G_BASE_DARK);
+  }
+}
+
+// --- Timer ---
+
+int DisplayManager::timerCentreY(float openness) const {
+  return 120 - (int)lroundf(80.0f * openness);
+}
+
+int DisplayManager::menuTop(float openness) const {
+  return CONTENT_H - (int)lroundf(160.0f * openness);
+}
+
+void DisplayManager::drawTimerScreen(int activeRow, bool menuOpen) {
+  if (enterScreen(SCR_TIMER)) {
+    _gfx->fillRect(0, 0, _paintW, CONTENT_H, C_BLACK);
+    strcpy(_timerStr, "00:00");
+    _openness = menuOpen ? 1.0f : 0.0f;
+    _menuTarget = menuOpen;
+    _drawnTimerY = -1;
+    _drawnMenuTop = CONTENT_H;
+    renderTimerFrame(_openness);
   }
 
-  int timerStart = _animOpening ? 120 : 40;
-  int timerEnd = _animOpening ? 40 : 120;
-  int menuStart = _animOpening ? 0 : 160;
-  int menuEnd = _animOpening ? 160 : 0;
-
-  const char *str = (_lastTimerStr[0] == '\0') ? "00:00" : _lastTimerStr;
-  _gfx->setTextSize(5);
-
-  int16_t x1, y1;
-  uint16_t w, h;
-  _gfx->getTextBounds(str, 0, 0, &x1, &y1, &w, &h);
-  int timerX = (240 - w) / 2;
-
-  // 1. Calculate New Positions
-  int currentTimerY = timerStart + (timerEnd - timerStart) * progress;
-  int currentMenuOffset = menuStart + (menuEnd - menuStart) * progress;
-  int currentMenuTop = 240 - currentMenuOffset;
-
-  // 2. Clear Dirty Rects
-  // Timer Trail:
-  _gfx->fillRect(timerX - 10, _prevTimerY - (h / 2) - 10, w + 20, h + 20,
-                 C_BLACK);
-
-  // Menu Trail:
-  if (currentMenuTop > _prevMenuLimit) {
-    _gfx->fillRect(0, _prevMenuLimit, 240, currentMenuTop - _prevMenuLimit,
-                   C_BLACK);
+  if (menuOpen != _menuTarget) {
+    // Start (or reverse) the slide from wherever it currently is
+    _menuTarget = menuOpen;
+    _animFrom = _openness;
+    _animStart = millis();
+    _animating = true;
+    _activeRow = -10;
+    return;
   }
 
-  // 3. Draw New Timer
-  _gfx->setTextColor(C_WHITE, C_BLACK);
-  _gfx->setTextSize(5);
-  int drawY = currentTimerY - (h / 2);
-  _gfx->setCursor(timerX, drawY);
-  _gfx->print(str);
+  if (_animating || !_menuTarget)
+    return;
 
-  // 4. Draw New Menu
-  renderMenuSlider(currentMenuOffset, "Reset", "Back");
+  static const char *const labels[NUM_ROWS] = {nullptr, "Reset", "Back"};
+  static const uint16_t on[NUM_ROWS] = {0, C_NEON_YELLOW, C_CYBER_PURPLE};
+  static const uint16_t off[NUM_ROWS] = {0, G_1, G_2};
+  drawMenuRows(labels, on, off, activeRow);
+}
 
-  // Update History
-  _prevTimerY = currentTimerY;
-  _prevMenuLimit = currentMenuTop;
+// One frame of the timer/menu layout at a given openness. Clears only the
+// strips that were vacated since the last frame, then paints the new state.
+void DisplayManager::renderTimerFrame(float openness) {
+  int cy = timerCentreY(openness);
+  int top = menuTop(openness);
+  int bandTop = cy - TIMER_BAND_H / 2;
+  int bandBottom = cy + TIMER_BAND_H / 2;
 
-  // Final State Update
-  if (!_animating) {
-    if (_animOpening) {
-      drawTimerScreen(-1, true); // Draws menu buttons
-      _lastTimerY = 40;
+  // 1. Strip the menu uncovered while sliding down
+  if (top > _drawnMenuTop)
+    _gfx->fillRect(0, _drawnMenuTop, _paintW, top - _drawnMenuTop, C_BLACK);
+
+  // 2. Strip the timer uncovered while moving
+  if (_drawnTimerY >= 0 && _drawnTimerY != cy) {
+    int oldTop = _drawnTimerY - TIMER_BAND_H / 2;
+    int oldBottom = _drawnTimerY + TIMER_BAND_H / 2;
+    int clearTop, clearBottom;
+    if (cy < _drawnTimerY) {
+      clearTop = max(oldTop, bandBottom);
+      clearBottom = oldBottom;
     } else {
-      _lastTimerY = 120;
+      clearTop = oldTop;
+      clearBottom = min(oldBottom, bandTop);
+    }
+    fillRectClipped(0, clearTop, _paintW, clearBottom - clearTop, C_BLACK, 0,
+                    top);
+  }
+
+  // 3. Timer, clipped so it never paints over the menu
+  drawTextInBand(_timerStr, TIMER_TEXT_SIZE, bandTop, TIMER_BAND_H, C_WHITE,
+                 C_BLACK, top);
+
+  // 4. Menu rows riding up with the slide
+  if (top < CONTENT_H) {
+    drawTextInBand("Reset", 3, top, ROW_H, contrastColor(G_1), G_1);
+    drawTextInBand("Back", 3, top + ROW_H, ROW_H, contrastColor(G_2), G_2);
+  }
+
+  _drawnTimerY = cy;
+  _drawnMenuTop = top;
+}
+
+void DisplayManager::drawTimerValue(unsigned long elapsedMs) {
+  unsigned long totalSeconds = elapsedMs / 1000;
+  char buf[sizeof(_timerStr)];
+  snprintf(buf, sizeof(buf), "%02lu:%02lu", totalSeconds / 60,
+           totalSeconds % 60);
+
+  if (strcmp(buf, _timerStr) == 0)
+    return;
+  strcpy(_timerStr, buf);
+
+  // While sliding, the next animation frame picks up the new value
+  if (_screen != SCR_TIMER || _animating)
+    return;
+
+  int cy = timerCentreY(_openness);
+  drawTextInBand(_timerStr, TIMER_TEXT_SIZE, cy - TIMER_BAND_H / 2,
+                 TIMER_BAND_H, C_WHITE, C_BLACK, menuTop(_openness));
+}
+
+// --- Hand cursor ---
+
+void DisplayManager::setHandCursor(float dist) {
+  if (dist < 0 || dist > BASE_ACTIVE_MAX_DISTANCE) {
+    _cursorTarget = -1;
+    return;
+  }
+  // Same scale as the screen: 0-15cm over the three rows, 15-25cm over the
+  // base strip
+  if (dist <= MAX_INTERACTION_DISTANCE)
+    _cursorTarget = dist / MAX_INTERACTION_DISTANCE * CONTENT_H;
+  else
+    _cursorTarget = BASE_Y + (dist - MAX_INTERACTION_DISTANCE) /
+                                 (BASE_ACTIVE_MAX_DISTANCE -
+                                  MAX_INTERACTION_DISTANCE) *
+                                 BASE_H;
+}
+
+// Moves the marker, repainting only the rail it uncovered
+void DisplayManager::drawCursorAt(int y) {
+  const int gx = SCREEN_W - GUTTER_W;
+  const int railX = SCREEN_W - GUTTER_W / 2 - RAIL_W / 2;
+  const int maxTop = BASE_Y + BASE_H - CURSOR_H;
+
+  int newTop = -1;
+  if (y >= 0)
+    newTop = constrain(y - CURSOR_H / 2, 0, maxTop);
+
+  if (_cursorDrawnY >= 0) {
+    int oldTop = constrain(_cursorDrawnY - CURSOR_H / 2, 0, maxTop);
+    int oldBottom = oldTop + CURSOR_H;
+    // Uncovered strips: above and below the new marker
+    int segs[2][2] = {{oldTop, oldBottom}, {0, 0}};
+    if (newTop >= 0) {
+      segs[0][0] = oldTop;
+      segs[0][1] = min(oldBottom, newTop);
+      segs[1][0] = max(oldTop, newTop + CURSOR_H);
+      segs[1][1] = oldBottom;
+    }
+    for (int i = 0; i < 2; i++) {
+      int h = segs[i][1] - segs[i][0];
+      if (h <= 0)
+        continue;
+      _gfx->fillRect(gx, segs[i][0], GUTTER_W, h, C_BLACK);
+      _gfx->fillRect(railX, segs[i][0], RAIL_W, h, G_1);
     }
   }
+
+  if (newTop >= 0)
+    _gfx->fillRect(gx + 1, newTop, GUTTER_W - 2, CURSOR_H, C_WHITE);
+  _cursorDrawnY = y;
 }
 
-void DisplayManager::drawTimerValue(unsigned long elapsedMs, int yOverride) {
-  unsigned long totalSeconds = elapsedMs / 1000;
-  unsigned long minutes = totalSeconds / 60;
-  unsigned long seconds = totalSeconds % 60;
+// --- Backlight ---
 
-  char buf[9];
-  snprintf(buf, sizeof(buf), "%02lu:%02lu", minutes, seconds);
-
-  int targetY = (yOverride != -1) ? yOverride : 120;
-
-  // Check if changed AND not moving
-  bool posChanged = (targetY != _lastTimerY);
-  bool textChanged = (strncmp(buf, _lastTimerStr, 8) != 0);
-
-  if (!posChanged && !textChanged) {
+void DisplayManager::setAwake(bool awake) {
+  int target = awake ? BL_ON : 0;
+  if (target == _blTarget)
     return;
-  }
-
-  // Save new
-  strncpy(_lastTimerStr, buf, 9);
-  _lastTimerY = targetY;
-
-  _gfx->setTextColor(C_WHITE, C_BLACK); // Use BG color to overwrite
-  _gfx->setTextSize(5);
-
-  int16_t x1, y1;
-  uint16_t w, h;
-  _gfx->getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
-
-  int x = (240 - w) / 2;
-  int y = targetY - (h / 2);
-
-  // Clear previous area safely (padding 10)
-  _gfx->fillRect(x - 10, y - 10, w + 20, h + 20, C_BLACK);
-
-  _gfx->setCursor(x, y);
-  _gfx->print(buf);
+  _blFrom = _blLevel;
+  _blTarget = target;
+  _blFadeStart = millis();
 }
 
-void DisplayManager::drawLightSettings(int activeIndex) {
-  if (activeIndex == _lastActiveIndex)
-    return;
+// --- OTA ---
 
-  // Rainbow, Coffee, Back
-  drawMenuItem(0, 80, "Rainbow", (activeIndex == 0), C_CYBER_PINK, G_1);
-  drawMenuItem(80, 80, "Coffee", (activeIndex == 1), C_CYBER_BLUE, G_2);
-  drawMenuItem(160, 80, "Back", (activeIndex == 2), C_CYBER_PURPLE, G_3);
-
-  _lastActiveIndex = activeIndex;
-}
-
-void DisplayManager::drawBootScreen() {
-  bool firstDraw = (_lastActiveIndex != -99);
-
-  if (!firstDraw) {
-    return;
-  }
-
-  _lastActiveIndex = -99;
-
-  if (firstDraw) {
+void DisplayManager::drawOtaProgress(unsigned int percent) {
+  if (enterScreen(SCR_OTA)) {
+    // OTA blocks the main loop, so update() can't fade: snap the light on
+    _blLevel = _blTarget = BL_ON;
+    ledcWrite(BL_CHANNEL, BL_ON);
     _gfx->fillScreen(C_BLACK);
-
-    // Splash Screen: 3 Rotated Rectangles
-    // Props: W=30, H=145, Angle=-13 deg
-    // Coords (Top-Left): (41, 86), (89, 86), (137, 86)
-
-    int16_t w = 30;
-    int16_t h = 145;
-    float angle = -13.0;
-
-    // Rect 1 (Shifted +5x to 46)
-    fillRotatedRect(46, 86, w, h, angle, C_WHITE);
-    // Rect 2 (Shifted +5x to 94)
-    fillRotatedRect(94, 86, w, h, angle, C_WHITE);
-    // Rect 3 (Shifted +5x to 142)
-    fillRotatedRect(142, 86, w, h, angle, C_WHITE);
-
-    // Draw Base (Grey Area) - Optional on splash? User asked for black screen.
-    // "black screen with 3 rectangles" -> Maybe no base?
-    // But system warms up. Let's keep it clean black as requested.
-    // updateBaseZone(false);
+    _baseState = -1;
+    drawTextInBand("Updating", 3, 100, 32, C_WHITE, C_BLACK);
+    _gfx->drawRect(OTA_BAR_X - 2, OTA_BAR_Y - 2, OTA_BAR_W + 4, OTA_BAR_H + 4,
+                   G_TEXT_DIM);
+    drawTextInBand("Don't unplug", 2, 190, 24, G_TEXT_DIM, C_BLACK);
+    _otaW = 0;
   }
+  if (percent > 100)
+    percent = 100;
+  int w = OTA_BAR_W * percent / 100;
+  if (w > _otaW) {
+    _gfx->fillRect(OTA_BAR_X + _otaW, OTA_BAR_Y, w - _otaW, OTA_BAR_H,
+                   C_CYBER_BLUE);
+    _otaW = w;
+  }
+}
+
+void DisplayManager::drawOtaMessage(const char *message, uint16_t color) {
+  drawOtaProgress(_otaW * 100 / OTA_BAR_W);
+  drawTextInBand(message, 2, 190, 24, color, C_BLACK);
 }
 
 void DisplayManager::fillRotatedRect(int16_t x, int16_t y, int16_t w, int16_t h,
@@ -471,12 +730,6 @@ void DisplayManager::fillRotatedRect(int16_t x, int16_t y, int16_t w, int16_t h,
   float cx = x + w / 2.0;
   float cy = y + h / 2.0;
 
-  // 4 Local Corners relative to center
-  // TL: -w/2, -h/2
-  // TR: w/2, -h/2
-  // BR: w/2, h/2
-  // BL: -w/2, h/2
-
   float corners[4][2] = {{-w / 2.0f, -h / 2.0f},
                          {w / 2.0f, -h / 2.0f},
                          {w / 2.0f, h / 2.0f},
@@ -485,16 +738,12 @@ void DisplayManager::fillRotatedRect(int16_t x, int16_t y, int16_t w, int16_t h,
   int16_t px[4], py[4];
 
   for (int i = 0; i < 4; i++) {
-    // Rotate
     float rx = corners[i][0] * c - corners[i][1] * s;
     float ry = corners[i][0] * s + corners[i][1] * c;
-
-    // Translate back
     px[i] = (int16_t)(cx + rx);
     py[i] = (int16_t)(cy + ry);
   }
 
-  // Ensure we have fillTriangle (Arduino_GFX usually has it)
   _gfx->fillTriangle(px[0], py[0], px[1], py[1], px[2], py[2], color);
   _gfx->fillTriangle(px[0], py[0], px[2], py[2], px[3], py[3], color);
 }

@@ -1,7 +1,16 @@
 #include "StateManager.h"
-#include "Config.h"
+#include <WiFi.h>
+#include <math.h>
+#include <time.h>
+
+#define ROW_NONE -1
+#define ROW_UNSET -2 // Disarmed, waiting for the first reading on a screen
 
 StateManager::StateManager(DistanceSensor *sensor, DisplayManager *display) {
+  _busClient = nullptr;
+  _wledClient = nullptr;
+  _networkManager = nullptr;
+
   // Validate input pointers
   if (!sensor || !display) {
     Serial.println("ERROR: StateManager received null pointers");
@@ -22,24 +31,33 @@ StateManager::StateManager(DistanceSensor *sensor, DisplayManager *display) {
   _networkManager->begin();
 
   _currentState = BOOT_WARMUP;
-  _currentZoneIdx = -1;
-  _lastZoneIdx = -1;
+  _stateEnteredAt = millis();
+
+  _rawZone = ROW_NONE;
+  _lastZoneIdx = ROW_NONE;
   _zoneStartTime = 0;
-  _successStartTime = 0;
-  _errorDisplayTimer = 0;
-  _ignoreInputUntil = 0;
+  _armed = false;
+  _rearmRow = ROW_UNSET;
+  _disarmDist = 0;
+
+  _lastInteractionTime = millis();
+  _busEffectStartTime = 0;
+  _wledOwner = WLED_NONE;
+  _lastPresenceTime = millis();
+  _leaveAlertActive = false;
+
+  _busSeconds = BUS_LOADING;
+  _busSecond = -1;
+  _busAt = 0;
+  _busLine[0] = '\0';
+  _lastBusResultOk = false;
+  _busEverRequested = false;
+  _lastBusRequest = 0;
 
   _timerStartTime = 0;
   _timerRunning = false;
   _timerMenuVisible = false;
-
-  _lastInteractionTime = millis();
-  _lastBusUpdate = 0;
-  _busEffectStartTime = 0;
-  _cachedBusMinutes = -1;
-
-  _unlockStartTime = 0;
-  _unlocking = false;
+  _timerMenuArmed = false;
 }
 
 StateManager::~StateManager() {
@@ -58,404 +76,572 @@ StateManager::~StateManager() {
   }
 }
 
-void StateManager::resetSelectionTimer() {
-  _zoneStartTime = millis();
-  _lastZoneIdx = -1; // Force re-detection
+// --- State plumbing ---
+
+bool StateManager::isInteractive(AppState s) {
+  return s == MAIN_MENU || s == TIMER_SCREEN || s == BUS_TIMES ||
+         s == LIGHT_SETTINGS || s == SHOWING_SUCCESS || s == SHOWING_API_ERROR;
+}
+
+// Every screen change goes through here so cleanup can't be forgotten
+void StateManager::goToState(AppState s) {
+  AppState old = _currentState;
+  _currentState = s;
+  _stateEnteredAt = millis();
+
+  // The hand is probably still where it was when it triggered this change,
+  // so it must move before anything on the new screen can be selected
+  // _rawZone is kept: every screen shares the same zone geometry, so the
+  // hysteresis that held the hand in its row should carry over too
+  disarm();
+  _lastZoneIdx = ROW_NONE;
+  resetStandbyTimer();
+
+  if (old == BUS_TIMES && s != BUS_TIMES)
+    endBusEffect(); // Always give the lights back
+  if (old == TIMER_SCREEN && s != TIMER_SCREEN)
+    _timerRunning = false;
+}
+
+void StateManager::disarm() {
+  _armed = false;
+  _rearmRow = ROW_UNSET;
+  _disarmDist = _sensor ? _sensor->getSmoothedDistance() : 0;
 }
 
 void StateManager::resetStandbyTimer() { _lastInteractionTime = millis(); }
 
 void StateManager::checkStandbyTimeout() {
-  if (_currentState == STANDBY || _currentState == UNLOCK_SEQUENCE)
+  if (!isInteractive(_currentState))
     return;
 
-  if (millis() - _lastInteractionTime > STANDBY_TIMEOUT_MS) {
-    // Go to Standby
-    _currentState = STANDBY;
-    _display->clearContentArea();
+  // A running timer keeps the screen awake (it's the thing being watched)
+  unsigned long limit = STANDBY_TIMEOUT_MS;
+  if (_currentState == TIMER_SCREEN && _timerRunning)
+    limit = TIMER_AWAKE_MAX_MS;
 
-    // Force immediate update of standby screen
-    _lastBusUpdate = 0; // Will trigger bus update loop
+  if (millis() - _lastInteractionTime > limit) {
+    goToState(STANDBY);
+    // Refresh straight away if what we have is getting old
+    if (millis() - _busAt > BUS_FRESH_MS)
+      requestBus();
   }
 }
+
+// --- Main tick ---
 
 void StateManager::update() {
   // Validate components before use
   if (!_sensor || !_display) {
-    return; // Cannot update with invalid components
+    return;
   }
 
   float dist = _sensor->getSmoothedDistance();
-  bool baseActive = (dist > BASE_ACTIVE_MIN_DISTANCE && dist < BASE_ACTIVE_MAX_DISTANCE);
 
-  // Only update base zone when NOT in standby to prevent screen flicker
-  if (_currentState != STANDBY) {
-    _display->updateBaseZone(baseActive);
-  }
+  pollBusResult();
+
+  if (_currentState != BOOT_WARMUP)
+    updateLeaveAlert();
+  updateDisplaySleep(dist);
 
   checkStandbyTimeout();
 
-  // --- State Machine ---
+  AppState tickState = _currentState;
   switch (_currentState) {
   case BOOT_WARMUP:
     updateWarmup();
     break;
 
   case STANDBY:
-    updateStandby();
+    updateStandby(dist);
     break;
 
   case UNLOCK_SEQUENCE:
-    updateUnlock();
+    updateUnlock(dist);
     break;
 
   case MAIN_MENU:
-  case LIGHT_SETTINGS:
+  case TIMER_SCREEN:
   case BUS_TIMES:
-    // Standard Zone Logic
-    // But first, specifics for screens
+  case LIGHT_SETTINGS:
+    updateInteractive(dist);
     break;
 
   case SHOWING_SUCCESS:
-    if (millis() - _successStartTime > SUCCESS_DISPLAY_TIME_MS) {
-      _currentState = MAIN_MENU;
-      _display->clearContentArea();
-      resetSelectionTimer();
-      _ignoreInputUntil = millis() + IGNORE_INPUT_TIME_MS;
-    }
-    // No zone logic during success screen
+    if (millis() - _stateEnteredAt > SUCCESS_DISPLAY_TIME_MS)
+      goToState(MAIN_MENU);
     break;
 
   case SHOWING_API_ERROR:
-    if (millis() - _errorDisplayTimer > ERROR_DISPLAY_TIME_MS) {
-      _currentState = MAIN_MENU;
-      _display->clearContentArea();
-      resetSelectionTimer();
-      _ignoreInputUntil = millis() + IGNORE_INPUT_TIME_MS;
-      _busEffectStartTime = 0;
-    }
-    break;
-
-  case TIMER_SCREEN:
-    // ... (Timer logic)
+    if (millis() - _stateEnteredAt > ERROR_DISPLAY_TIME_MS)
+      goToState(MAIN_MENU);
     break;
   }
 
-  // --- Timer Specifics ---
-  if (_currentState == TIMER_SCREEN) {
-    if (baseActive && !_timerMenuVisible) {
-      _display->animateTimerMenu(true);
-      _timerMenuVisible = true;
-      resetSelectionTimer();
-      resetStandbyTimer();
-    } else if (!baseActive && _timerMenuVisible && dist > 30.0) {
-      _display->animateTimerMenu(false);
-      _timerMenuVisible = false;
-      resetSelectionTimer();
-    }
-
-    if (_timerRunning) {
-      unsigned long elapsed = millis() - _timerStartTime;
-      int timerY = _timerMenuVisible ? 40 : 120;
-      _display->drawTimerValue(elapsed, timerY);
-    }
+  // Base strip and cursor go after the screen draw, and wait a tick after a
+  // state change so the new screen has set up its layout (and cursor gutter)
+  if (isInteractive(_currentState) && _currentState == tickState) {
+    bool baseActive =
+        (dist > BASE_ACTIVE_MIN_DISTANCE && dist < BASE_ACTIVE_MAX_DISTANCE);
+    _display->updateBaseZone(baseActive);
+    _display->setHandCursor(dist);
   }
 
-  // --- Zone Logic for Interactive Screens ---
-  if (_currentState != STANDBY && _currentState != UNLOCK_SEQUENCE &&
-      _currentState != SHOWING_SUCCESS && _currentState != SHOWING_API_ERROR) {
-    int numItems = 0;
-    switch (_currentState) {
-    case MAIN_MENU:
-      numItems = 3; // Timer, Bus, Lights
-      break;
-    case TIMER_SCREEN:
-      numItems = _timerMenuVisible ? 3 : 0;
-      break;
-    case LIGHT_SETTINGS:
-      numItems = 3;
-      break;
-    case BUS_TIMES:
-      numItems = 1; // 1 Unified Zone for Back
-      break;
-    }
-
-    int zone = -1;
-    if (numItems > 0 && dist >= 0 && dist <= 15.0) {
-      zone = calculateZone(dist, numItems);
-
-      // Timer Screen Remapping
-      if (_currentState == TIMER_SCREEN && _timerMenuVisible) {
-        zone -= 1; // Shift 0->-1, 1->0, 2->1
-      }
-    }
-
-    // Interaction Tracking
-    if (dist < 25.0) {
-      resetStandbyTimer();
-    }
-
-    // Selection Logic
-    if (millis() < _ignoreInputUntil) {
-      _lastZoneIdx = -1;
-      _zoneStartTime = millis();
-    } else if (zone != _lastZoneIdx) {
-      _lastZoneIdx = zone;
-      _zoneStartTime = millis();
-    } else if (zone != -1 && zone < numItems) { // Guard against invalid zones
-      if (millis() - _zoneStartTime > DWELL_THRESHOLD_MS) {
-        handleSelection(zone);
-        _zoneStartTime = millis();
-        resetStandbyTimer();
-      }
-    }
-
-    // Update Display
-    switch (_currentState) {
-    case MAIN_MENU:
-      _display->drawMainMenu(zone);
-      break;
-    case TIMER_SCREEN:
-      _display->drawTimerScreen(zone, _timerMenuVisible);
-      break;
-    case LIGHT_SETTINGS:
-      _display->drawLightSettings(zone);
-      break;
-    case BUS_TIMES:
-      // Check for incoming async bus data
-      if (_networkManager->isBusDataReady()) {
-        _cachedBusMinutes = _networkManager->getLatestBusMinutes();
-        _networkManager->clearBusDataReady();
-
-        if (_cachedBusMinutes == -2) {
-          _currentState = SHOWING_API_ERROR;
-          _errorDisplayTimer = millis();
-          _display->drawErrorScreen("API Error");
-          break; // Skip drawing bus screen
-        }
-
-        _networkManager->requestWledBusTime(_cachedBusMinutes);
-      }
-      _display->drawBusScreen(_cachedBusMinutes, zone);
-      break;
-    }
-    _currentZoneIdx = zone;
-  }
-
-  // Check Bus Effect Timeout (10s)
-  if (_currentState == BUS_TIMES && _busEffectStartTime > 0) {
-    if (millis() - _busEffectStartTime > BUS_EFFECT_TIMEOUT_MS) {
-      _networkManager->requestWledRestoreState();
-      _busEffectStartTime = 0;
-    }
+  // Hand the lights back after the bus colour has been shown for a while
+  if (_wledOwner == WLED_BUS &&
+      millis() - _busEffectStartTime > BUS_EFFECT_TIMEOUT_MS) {
+    endBusEffect();
   }
 }
 
-void StateManager::updateStandby() {
-  float dist = _sensor->getSmoothedDistance();
+// --- Zones & selection ---
 
-  // Unlock Trigger
-  if (dist < UNLOCK_DISTANCE_CM) {
-    _currentState = UNLOCK_SEQUENCE;
-    _unlockStartTime = millis();
-    _unlocking = true;
-    _display->clearContentArea();
-    return;
+// Splits the usable range into numZones bands. Once the hand is in a zone it
+// stays there until it moves ZONE_HYSTERESIS_CM past the edge, so jitter on
+// a boundary doesn't flicker the highlight or restart the dwell.
+int StateManager::calculateZone(float dist, int numZones, int prevZone) {
+  if (numZones <= 0 || dist < 0)
+    return ROW_NONE;
+
+  float zoneSize = MAX_INTERACTION_DISTANCE / numZones;
+
+  if (prevZone >= 0 && prevZone < numZones) {
+    float lo = prevZone * zoneSize - ZONE_HYSTERESIS_CM;
+    float hi = (prevZone + 1) * zoneSize + ZONE_HYSTERESIS_CM;
+    if (dist >= lo && dist <= hi)
+      return prevZone;
   }
 
-  // Bus Update Loop (Periodically)
-  if (millis() - _lastBusUpdate > BUS_UPDATE_INTERVAL_MS ||
-      _lastBusUpdate == 0) {
-    _lastBusUpdate = millis();
-    // Request async fetch
-    _networkManager->requestBusUpdate();
-  }
+  if (dist > MAX_INTERACTION_DISTANCE)
+    return ROW_NONE;
 
-  // Apply async fetch result
-  if (_networkManager->isBusDataReady()) {
-    _cachedBusMinutes = _networkManager->getLatestBusMinutes();
-    _networkManager->clearBusDataReady();
-    _display->drawStandbyScreen(_cachedBusMinutes);
-  } else {
-    // Just draw with whatever we had locally
-    _display->drawStandbyScreen(_cachedBusMinutes);
-  }
-}
-
-void StateManager::updateUnlock() {
-  float dist = _sensor->getSmoothedDistance();
-
-  if (dist > UNLOCK_DISTANCE_CM + UNLOCK_HYSTERESIS_CM) { // Hysteresis
-    // Cancel
-    _currentState = STANDBY;
-    _display->drawStandbyScreen(_cachedBusMinutes);
-    return;
-  }
-
-  // Progress
-  unsigned long elapsed = millis() - _unlockStartTime;
-  float progress = (float)elapsed / UNLOCK_TIME_MS;
-
-  _display->drawUnlockVisual(progress);
-
-  if (progress >= 1.0) {
-    // Unlocked!
-    _currentState = MAIN_MENU;
-    _display->clearContentArea();
-    resetStandbyTimer();
-    resetSelectionTimer();
-  }
-}
-
-int StateManager::calculateZone(float dist, int numItems) {
-  // Validate inputs
-  if (numItems <= 0) {
-    return -1; // Invalid number of items
-  }
-
-  if (dist < 0 || dist > MAX_INTERACTION_DISTANCE) {
-    return -1; // Distance out of interaction range
-  }
-
-  float itemHeight = MAX_INTERACTION_DISTANCE / numItems;
-  int zone = (int)(dist / itemHeight);
-
-  // Clamp to valid range
-  if (zone >= numItems)
-    zone = numItems - 1;
+  int zone = (int)(dist / zoneSize);
+  if (zone >= numZones)
+    zone = numZones - 1;
   if (zone < 0)
     zone = 0;
-
   return zone;
 }
 
-void StateManager::handleSelection(int index) {
-  switch (_currentState) {
-  case MAIN_MENU:
-    actionMainMenu(index);
-    break;
-  case TIMER_SCREEN:
-    actionTimer(index);
-    break;
-  case LIGHT_SETTINGS:
-    actionLights(index);
-    break;
-  case BUS_TIMES:
-    actionBusTimes(index);
-    break;
-  case STANDBY:
-  case UNLOCK_SEQUENCE:
-    // Should not happen as zones are inactive
-    break;
-  case SHOWING_SUCCESS:
-  case SHOWING_API_ERROR:
-    break;
+// Opens the timer menu when the hand arrives in the base zone, closes it
+// when the hand leaves. Returns true if it changed this tick.
+bool StateManager::updateTimerMenu(float dist) {
+  bool baseActive =
+      (dist > BASE_ACTIVE_MIN_DISTANCE && dist < BASE_ACTIVE_MAX_DISTANCE);
+
+  // The hand that picked "Timer" passes through the base zone on its way
+  // out; don't treat that as a request to open the menu
+  if (!_timerMenuArmed && dist > TIMER_MENU_CLOSE_DISTANCE)
+    _timerMenuArmed = true;
+
+  if (!_timerMenuVisible && _timerMenuArmed && baseActive) {
+    _timerMenuVisible = true;
+    return true;
   }
-  _ignoreInputUntil = millis() + IGNORE_INPUT_TIME_MS;
+  if (_timerMenuVisible && dist > TIMER_MENU_CLOSE_DISTANCE) {
+    _timerMenuVisible = false;
+    return true;
+  }
+  return false;
 }
 
-void StateManager::actionMainMenu(int index) {
-  resetSelectionTimer();
+void StateManager::updateInteractive(float dist) {
+  unsigned long now = millis();
 
-  if (index == 0) { // Timer
-    _currentState = TIMER_SCREEN;
-    _display->clearContentArea();
+  // Each screen is three 5cm zones that line up with the three 80px rows.
+  // firstRow skips a non-selectable top row (timer / bus info).
+  int numZones = 3;
+  int firstRow = 0;
+  switch (_currentState) {
+  case TIMER_SCREEN: {
+    bool toggled = updateTimerMenu(dist);
+    bool menuReady = _timerMenuVisible && !toggled && !_display->isAnimating();
+    numZones = menuReady ? 3 : 0;
+    firstRow = 1;
+    break;
+  }
+  case BUS_TIMES:
+    firstRow = 1;
+    if (now - _lastBusRequest > BUS_SCREEN_REFRESH_MS)
+      requestBus();
+    break;
+  default:
+    break;
+  }
+
+  int zone = calculateZone(dist, numZones, _rawZone);
+  _rawZone = zone;
+  int row = (zone >= firstRow) ? zone : ROW_NONE;
+
+  // Interaction Tracking
+  if (dist < BASE_ACTIVE_MAX_DISTANCE)
+    resetStandbyTimer();
+
+  // Re-arm once the hand leaves, or genuinely moves to a different row.
+  // The distance check stops a hand resting near a boundary from drifting
+  // across it and re-arming without the user meaning to move.
+  if (!_armed) {
+    if (_rearmRow == ROW_UNSET)
+      _rearmRow = row;
+    else if (row == ROW_NONE && _rearmRow != ROW_NONE)
+      _armed = true;
+    else if (row != _rearmRow && fabsf(dist - _disarmDist) > REARM_DISTANCE_CM)
+      _armed = true;
+  }
+
+  // Dwell tracking
+  if (row != _lastZoneIdx) {
+    _lastZoneIdx = row;
+    _zoneStartTime = now;
+  }
+  float progress = 0;
+  if (_armed && row >= 0)
+    progress = (now - _zoneStartTime) / (float)DWELL_THRESHOLD_MS;
+
+  // Draw
+  switch (_currentState) {
+  case MAIN_MENU:
+    _display->drawMainMenu(row);
+    break;
+  case TIMER_SCREEN:
+    _display->drawTimerScreen(row, _timerMenuVisible);
+    if (_timerRunning)
+      _display->drawTimerValue(now - _timerStartTime);
+    break;
+  case LIGHT_SETTINGS:
+    _display->drawLightSettings(row);
+    break;
+  case BUS_TIMES:
+    _display->drawBusScreen(busView(), row);
+    break;
+  default:
+    break;
+  }
+  _display->drawDwellProgress(row, progress);
+
+  if (progress >= 1.0f)
+    handleSelection(row);
+}
+
+void StateManager::handleSelection(int row) {
+  switch (_currentState) {
+  case MAIN_MENU:
+    actionMainMenu(row);
+    break;
+  case TIMER_SCREEN:
+    actionTimer(row);
+    break;
+  case LIGHT_SETTINGS:
+    actionLights(row);
+    break;
+  case BUS_TIMES:
+    actionBusTimes(row);
+    break;
+  default:
+    break;
+  }
+  disarm(); // One selection per visit to a row
+}
+
+// --- Actions ---
+
+void StateManager::actionMainMenu(int row) {
+  if (row == 0) { // Timer
+    goToState(TIMER_SCREEN);
     _timerStartTime = millis();
     _timerRunning = true;
     _timerMenuVisible = false;
-  } else if (index == 1) { // Bus Times
-    _currentState = BUS_TIMES;
-    _display->clearContentArea();
-
-    // Save WLED state before apply effect
-    _networkManager->requestWledSaveState();
-    _busEffectStartTime = millis();
-
-    // Show Loading Animation
-    _networkManager->requestWledLoading();
-
-    // Fetch asynchronously
-    _networkManager->requestBusUpdate();
-    _cachedBusMinutes = -1; // Loading state
-  } else if (index == 2) {  // Lights
-    _currentState = LIGHT_SETTINGS;
-    _display->clearContentArea();
+    _timerMenuArmed = false;
+  } else if (row == 1) { // Bus Times
+    enterBusScreen();
+  } else if (row == 2) { // Lights
+    goToState(LIGHT_SETTINGS);
   }
 }
 
-void StateManager::actionTimer(int index) {
-  if (index == 0) { // Reset
+void StateManager::actionTimer(int row) {
+  if (row == 1) { // Reset
     _timerStartTime = millis();
-    resetSelectionTimer();
-  } else if (index == 1) { // Back
-    _currentState = MAIN_MENU;
-    _display->clearContentArea();
-    _timerRunning = false;
-    resetSelectionTimer();
+  } else if (row == 2) { // Back
+    goToState(MAIN_MENU);
   }
 }
 
-void StateManager::actionLights(int index) {
-  resetSelectionTimer();
-  if (index == 0) { // Rainbow
+void StateManager::actionLights(int row) {
+  if (row == 0) { // Rainbow
+    takeBackLights();
     _networkManager->requestWledRainbow();
+    goToState(SHOWING_SUCCESS);
     _display->drawSuccessScreen("Rainbow!");
-  } else if (index == 1) { // Solid (Now Coffee)
+  } else if (row == 1) { // Solid (Now Coffee)
+    takeBackLights();
     _networkManager->requestWledCoffee();
+    goToState(SHOWING_SUCCESS);
     _display->drawSuccessScreen("Coffee");
-  } else if (index == 2) { // Back
-    _currentState = MAIN_MENU;
-    _display->clearContentArea();
+  } else if (row == 2) { // Back
+    goToState(MAIN_MENU);
+  }
+}
+
+void StateManager::actionBusTimes(int row) {
+  if (row == 1) { // Refresh
+    if (startBusEffect())
+      _networkManager->requestWledLoading();
+    requestBus();
+  } else if (row == 2) { // Back
+    goToState(MAIN_MENU);
+  }
+}
+
+// --- Bus data ---
+
+void StateManager::requestBus() {
+  _lastBusRequest = millis();
+  _busEverRequested = true;
+  _networkManager->requestBusUpdate();
+}
+
+void StateManager::pollBusResult() {
+  int seconds, second;
+  unsigned long at;
+  char line[MAX_LINE_NAME_LENGTH + 1];
+  if (!_networkManager->takeBusResult(seconds, second, at, line, sizeof(line)))
+    return;
+
+  applyBusResult(seconds, second, at, line);
+
+  if (_currentState != BUS_TIMES)
+    return;
+
+  int m = busMinutes();
+  if (m == BUS_API_ERROR || m == BUS_OFFLINE) {
+    // Nothing usable to show
+    goToState(SHOWING_API_ERROR);
+    _display->drawErrorScreen(m == BUS_OFFLINE ? "No WiFi" : "API Error");
     return;
   }
 
-  // Go to non-blocking success state
-  _currentState = SHOWING_SUCCESS;
-  _successStartTime = millis();
-}
-
-void StateManager::actionBusTimes(int index) {
-  resetSelectionTimer();
-  // Any zone interaction acts as Back when numItems = 1
-  if (index == 0) {
-    _currentState = MAIN_MENU;
-    _display->clearContentArea();
-    _busEffectStartTime = 0;
+  if (_wledOwner == WLED_BUS) {
+    if (m >= 0)
+      _networkManager->requestWledBusTime(m);
+    else
+      endBusEffect(); // No buses: nothing to colour, give the lights back
   }
 }
+
+void StateManager::applyBusResult(int seconds, int second, unsigned long at,
+                                  const char *line) {
+  _lastBusResultOk = (seconds >= 0 || seconds == BUS_NO_BUSES);
+
+  // A failed refresh shouldn't wipe good data: keep counting down what we
+  // had until it's too old to trust
+  bool haveRecentData = _busSeconds >= 0 && millis() - _busAt < BUS_STALE_MS;
+  if (!_lastBusResultOk && haveRecentData) {
+    Serial.printf("[Bus] Refresh failed (%d), keeping last data\n", seconds);
+    return;
+  }
+
+  _busSeconds = seconds;
+  _busSecond = (seconds >= 0) ? second : -1;
+  _busAt = at;
+  strncpy(_busLine, line, sizeof(_busLine) - 1);
+  _busLine[sizeof(_busLine) - 1] = '\0';
+}
+
+// Minutes until the next bus, counted down locally since the last fetch
+int StateManager::busMinutes() {
+  if (_busSeconds < 0)
+    return _busSeconds;
+  return remainingSeconds(_busSeconds) / 60;
+}
+
+// Seconds left for a bus that was fetchedSeconds away at the last fetch
+// (never negative), or -1 if there's no such bus
+long StateManager::remainingSeconds(int fetchedSeconds) {
+  if (fetchedSeconds < 0)
+    return -1;
+  long left = (long)fetchedSeconds - (long)((millis() - _busAt) / 1000UL);
+  return left < 0 ? 0 : left;
+}
+
+BusView StateManager::busView() {
+  BusView v;
+  v.minutes = busMinutes();
+  v.line = _busLine;
+  v.refreshing = _networkManager->isBusFetchPending();
+  v.online = (WiFi.status() == WL_CONNECTED);
+  long second = remainingSeconds(_busSecond);
+  v.secondMinutes = (_busSeconds >= 0 && second >= 0) ? second / 60 : -1;
+  v.leaveNow = _leaveAlertActive;
+  v.alertMinutes = _leaveAlertActive ? leaveAlertMinutes() : -1;
+  return v;
+}
+
+void StateManager::enterBusScreen() {
+  goToState(BUS_TIMES);
+
+  // Recent data shows instantly (and colours the lights straight away);
+  // otherwise show the loading animation while we fetch
+  if (startBusEffect()) {
+    if (_busSeconds >= 0 && millis() - _busAt < BUS_FRESH_MS)
+      _networkManager->requestWledBusTime(busMinutes());
+    else
+      _networkManager->requestWledLoading();
+  }
+
+  requestBus();
+}
+
+// Returns false if the leave-now alert has the lights (it wins)
+bool StateManager::startBusEffect() {
+  if (_wledOwner == WLED_LEAVE)
+    return false;
+  if (_wledOwner == WLED_NONE)
+    _networkManager->requestWledSaveState();
+  _wledOwner = WLED_BUS;
+  _busEffectStartTime = millis();
+  return true;
+}
+
+void StateManager::endBusEffect() {
+  if (_wledOwner != WLED_BUS)
+    return;
+  _networkManager->requestWledRestoreState();
+  _wledOwner = WLED_NONE;
+}
+
+// A manual Lights choice wins over any running effect: drop the effect's
+// claim on the strip and its saved state, so nothing "restores" over it later
+void StateManager::takeBackLights() {
+  if (_wledOwner == WLED_NONE)
+    return;
+  _networkManager->requestWledDiscardSaved();
+  _wledOwner = WLED_NONE;
+}
+
+// --- Leave-now alert ---
+
+bool StateManager::inLeaveAlertHours() {
+  // Read the clock directly: getLocalTime() sleeps 10ms when unsynced
+  time_t now = time(nullptr);
+  if (now < 1700000000)
+    return false; // NTP hasn't synced yet
+  struct tm t;
+  localtime_r(&now, &t);
+  if (!(LEAVE_ALERT_DAYS & (1 << t.tm_wday)))
+    return false;
+  int hhmm = t.tm_hour * 100 + t.tm_min;
+  return hhmm >= LEAVE_ALERT_START_HHMM && hhmm < LEAVE_ALERT_END_HHMM;
+}
+
+// Minutes to the first of the next two buses that leaving now still
+// catches, or -1 if neither is in the window
+int StateManager::leaveAlertMinutes() {
+  if (_busSeconds < 0 || millis() - _busAt > BUS_STALE_MS)
+    return -1;
+  long buses[2] = {remainingSeconds(_busSeconds), remainingSeconds(_busSecond)};
+  for (int i = 0; i < 2; i++) {
+    if (buses[i] >= LEAVE_WINDOW_MIN_MIN * 60L &&
+        buses[i] <= LEAVE_WINDOW_MAX_MIN * 60L)
+      return buses[i] / 60;
+  }
+  return -1;
+}
+
+// A bus is a few minutes from the window: worth refreshing more often
+bool StateManager::busNearLeaveWindow() {
+  if (_busSeconds < 0 || !inLeaveAlertHours())
+    return false;
+  long buses[2] = {remainingSeconds(_busSeconds), remainingSeconds(_busSecond)};
+  for (int i = 0; i < 2; i++) {
+    if (buses[i] >= LEAVE_WINDOW_MIN_MIN * 60L &&
+        buses[i] <= (LEAVE_WINDOW_MAX_MIN + 4) * 60L)
+      return true;
+  }
+  return false;
+}
+
+void StateManager::updateLeaveAlert() {
+  bool want = leaveAlertMinutes() >= 0 && inLeaveAlertHours();
+  if (want == _leaveAlertActive)
+    return;
+  _leaveAlertActive = want;
+
+  if (want) {
+    Serial.println("[Alert] Leave now");
+    if (_wledOwner == WLED_NONE)
+      _networkManager->requestWledSaveState();
+    _wledOwner = WLED_LEAVE; // Takes over from the bus effect if running
+    _networkManager->requestWledLeaveNow();
+  } else if (_wledOwner == WLED_LEAVE) {
+    _networkManager->requestWledRestoreState();
+    _wledOwner = WLED_NONE;
+  }
+}
+
+// --- Display sleep ---
+
+void StateManager::updateDisplaySleep(float dist) {
+  // Anything going on keeps the screen lit: a hand nearby, any screen
+  // other than standby, or a leave-now alert
+  bool present = dist >= 0 && dist < BASE_ACTIVE_MAX_DISTANCE;
+  if (present || _leaveAlertActive || _currentState != STANDBY)
+    _lastPresenceTime = millis();
+  _display->setAwake(millis() - _lastPresenceTime < DISPLAY_SLEEP_MS);
+}
+
+// --- Passive states ---
 
 void StateManager::updateWarmup() {
   _display->drawBootScreen();
+  unsigned long now = millis();
 
-  // 1. Minimum Duration Check (2 seconds)
-  if (millis() < 2000) {
+  // Fetch as soon as WiFi is up, retrying every few seconds
+  if (WiFi.status() == WL_CONNECTED &&
+      (!_busEverRequested || now - _lastBusRequest > BUS_BOOT_RETRY_MS)) {
+    requestBus();
+  }
+
+  if (now < SPLASH_MIN_MS)
+    return;
+
+  // Wait for a real answer ("no buses" counts), but never forever: at night,
+  // offline or with TfL down we still need to get to the standby screen
+  bool haveAnswer = (_busSeconds >= 0 || _busSeconds == BUS_NO_BUSES);
+  if (!haveAnswer && now < SPLASH_MAX_MS)
+    return;
+
+  goToState(STANDBY);
+}
+
+void StateManager::updateStandby(float dist) {
+  // Unlock Trigger
+  if (dist < UNLOCK_DISTANCE_CM) {
+    goToState(UNLOCK_SEQUENCE);
     return;
   }
 
-  // 2. Data Availability Check
-  // We need valid bus times before showing the standby screen.
-  // _cachedBusMinutes is initialized to -1.
-  if (_cachedBusMinutes < 0) {
-    // Retry fetching every 5 seconds (or immediately if first run after 2s)
-    if (millis() - _lastBusUpdate > 5000) {
-      _networkManager->requestBusUpdate();
-      _lastBusUpdate = millis();
-    }
+  // Refresh periodically, sooner if the last attempt failed
+  unsigned long interval =
+      !_lastBusResultOk     ? BUS_ERROR_RETRY_MS
+      : busNearLeaveWindow() ? LEAVE_REFRESH_MS
+                             : BUS_UPDATE_INTERVAL_MS;
+  if (!_busEverRequested || millis() - _lastBusRequest > interval)
+    requestBus();
 
-    if (_networkManager->isBusDataReady()) {
-      _cachedBusMinutes = _networkManager->getLatestBusMinutes();
-      _networkManager->clearBusDataReady();
-    }
+  _display->drawStandbyScreen(busView());
+}
 
-    // If still invalid, keep waiting (splash screen remains)
-    if (_cachedBusMinutes < 0) {
-      return;
-    }
+void StateManager::updateUnlock(float dist) {
+  if (dist > UNLOCK_DISTANCE_CM + UNLOCK_HYSTERESIS_CM) { // Hysteresis
+    goToState(STANDBY);
+    _display->drawStandbyScreen(busView());
+    return;
   }
 
-  // If we get here: Minimum time passed AND we have valid data
-  _currentState = STANDBY;
-  _display->clearContentArea();
-  // _lastBusUpdate was just updated if we fetched, so Standby won't refetch
-  // immediately.
+  float progress = (float)(millis() - _stateEnteredAt) / UNLOCK_TIME_MS;
+  _display->drawUnlockVisual(progress);
+
+  if (progress >= 1.0f)
+    goToState(MAIN_MENU);
 }

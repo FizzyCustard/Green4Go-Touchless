@@ -14,15 +14,23 @@ public:
   void setCoffee();
   void setLoading();
   void updateForBusTime(int minutes);
+  void setLeaveNow();
 
   void saveState();
   void restoreState();
+  void discardSavedState();
 
 private:
   WiFiClient _client;
   String _savedState;
   bool _hasSavedState;
-  void sendRequest(String &jsonPayload);
+  unsigned long _backoffUntil; // Skip calls until this millis() after a failure
+  bool _inBackoff;
+
+  bool ready(const char *what, bool ignoreBackoff = false);
+  bool buildUrl(String &url);
+  void noteResult(int httpCode);
+  int sendRequest(String &jsonPayload, bool ignoreBackoff = false);
 };
 
 #endif
