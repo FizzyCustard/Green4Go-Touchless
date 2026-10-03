@@ -90,11 +90,11 @@ static const char PRESET_COFFEE[] =
 
 // Blue breathe while a bus fetch is in flight
 static const char EFFECT_LOADING[] =
-    R"json({"on":true,"seg":[{"id":0,"fx":2,"sx":128,"ix":128,"col":[[0,0,255]]}]})json";
+    R"json({"on":true,"seg":[{"id":0,"on":true,"frz":false,"fx":2,"sx":128,"ix":128,"col":[[0,0,255]]}]})json";
 
 // Fast green breathe: "go now"
 static const char EFFECT_LEAVE_NOW[] =
-    R"json({"on":true,"seg":[{"id":0,"fx":2,"sx":220,"ix":128,"col":[[0,255,0]]}]})json";
+    R"json({"on":true,"seg":[{"id":0,"on":true,"frz":false,"fx":2,"sx":220,"ix":128,"col":[[0,255,0]]}]})json";
 
 void WledClient::setRainbow() { sendRequest(PRESET_RAINBOW); }
 
@@ -117,9 +117,9 @@ void WledClient::updateForBusTime(int minutes) {
   else
     color = "255,165,0"; // Orange: getting long
 
-  char json[96];
+  char json[112];
   snprintf(json, sizeof(json),
-           R"json({"on":true,"seg":[{"id":0,"fx":0,"col":[[%s]]}]})json",
+           R"json({"on":true,"seg":[{"id":0,"on":true,"frz":false,"fx":0,"col":[[%s]]}]})json",
            color);
   Serial.printf("[WLED] Bus colour for %d min\n", minutes);
   sendRequest(json);

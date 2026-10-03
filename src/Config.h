@@ -55,7 +55,7 @@
 #define BUS_STALE_MS 180000            // Keep counting down old data this long if a refresh fails
 #define BUS_FRESH_MS 60000             // Data younger than this is shown instantly on the Bus screen
 
-// --- Bus status codes (negative "minutes" values) ---
+// --- Bus status codes (negative values where a time would otherwise be) ---
 #define BUS_LOADING -1   // No data yet / fetch in flight
 #define BUS_API_ERROR -2 // HTTP or parse failure
 #define BUS_NO_BUSES -3  // API worked but no matching arrivals
