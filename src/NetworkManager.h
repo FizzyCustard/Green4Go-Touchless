@@ -72,7 +72,8 @@ private:
   int _latestSecondSeconds;
   unsigned long _latestBusAt;
   char _latestLine[MAX_LINE_NAME_LENGTH + 1];
-  unsigned long _commandStartedAt; // 0 = idle
+  bool _commandRunning;
+  unsigned long _commandStartedAt;
 
   void enqueue(NetworkAction action, int param = 0);
   static void networkTask(void *parameter);
