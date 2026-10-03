@@ -1,4 +1,12 @@
 {
-  "rainbow_preset": "{\"on\":true,\"bri\":200,\"transition\":7,\"mainseg\":0,\"seg\":[{\"id\":0,\"grp\":1,\"spc\":0,\"of\":0,\"on\":true,\"frz\":false,\"bri\":255,\"cct\":127,\"set\":0,\"col\":[[188,71,255],[0,0,0],[0,0,0]],\"fx\":9,\"sx\":128,\"ix\":128,\"pal\":0,\"c1\":128,\"c2\":128,\"c3\":16,\"sel\":true,\"rev\":false,\"mi\":false,\"o1\":false,\"o2\":false,\"o3\":false,\"si\":0,\"m12\":0}]}",
-  "coffee_preset": "{\"on\":true,\"bri\":200,\"transition\":7,\"mainseg\":0,\"seg\":[{\"id\":0,\"grp\":1,\"spc\":0,\"of\":0,\"on\":true,\"frz\":false,\"bri\":255,\"cct\":127,\"set\":0,\"n\":\"\",\"col\":[[255,221,209],[0,0,0],[0,0,0]],\"fx\":0,\"sx\":128,\"ix\":128,\"pal\":0,\"c1\":128,\"c2\":128,\"c3\":16,\"sel\":true,\"rev\":false,\"mi\":false,\"o1\":false,\"o2\":false,\"o3\":false,\"si\":0,\"m12\":0}]}"
+  "_note": "Mirrors the payloads in src/WledClient.cpp. Every payload targets segment 0 only; never add other segment entries or stop:0 padding (that deletes the user's segments). bus_colour is a template: col is red, green or orange from the minutes thresholds.",
+  "rainbow": {"on":true,"bri":200,"transition":7,"seg":[{"id":0,"on":true,"frz":false,"bri":255,"col":[[188,71,255],[0,0,0],[0,0,0]],"fx":9,"sx":128,"ix":128,"pal":0}]},
+  "coffee": {"on":true,"bri":200,"transition":7,"seg":[{"id":0,"on":true,"frz":false,"bri":255,"col":[[255,221,209],[0,0,0],[0,0,0]],"fx":0,"pal":0}]},
+  "loading": {"on":true,"seg":[{"id":0,"on":true,"frz":false,"fx":2,"sx":128,"ix":128,"col":[[0,0,255]]}]},
+  "leave_now": {"on":true,"seg":[{"id":0,"on":true,"frz":false,"fx":2,"sx":220,"ix":128,"col":[[0,255,0]]}]},
+  "bus_colour": {
+    "red": {"on":true,"seg":[{"id":0,"on":true,"frz":false,"fx":0,"col":[[255,0,0]]}]},
+    "green": {"on":true,"seg":[{"id":0,"on":true,"frz":false,"fx":0,"col":[[0,255,0]]}]},
+    "orange": {"on":true,"seg":[{"id":0,"on":true,"frz":false,"fx":0,"col":[[255,165,0]]}]}
+  }
 }
