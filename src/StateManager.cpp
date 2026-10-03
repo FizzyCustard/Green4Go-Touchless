@@ -276,12 +276,19 @@ void StateManager::updateInteractive(float dist) {
   // The distance check stops a hand resting near a boundary from drifting
   // across it and re-arming without the user meaning to move.
   if (!_armed) {
+    bool arm = false;
     if (_rearmRow == ROW_UNSET)
       _rearmRow = row;
     else if (row == ROW_NONE && _rearmRow != ROW_NONE)
-      _armed = true;
+      arm = true;
     else if (row != _rearmRow && fabsf(dist - _disarmDist) > REARM_DISTANCE_CM)
+      arm = true;
+    if (arm) {
+      // The dwell counts from the moment of arming, never from earlier
+      // time spent on the row while disarmed
       _armed = true;
+      _zoneStartTime = now;
+    }
   }
 
   // Dwell tracking

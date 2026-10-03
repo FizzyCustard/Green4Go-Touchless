@@ -5,8 +5,9 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 
-// Talks to a WLED controller over its JSON API. All calls block for at most
-// WLED_TIMEOUT_MS and run on the network task, never the UI loop.
+// Talks to a WLED controller over its JSON API. Every call is bounded by
+// WLED_TIMEOUT_MS-based limits (a save reads the body within 2x that) and
+// runs on the network task, never the UI loop.
 class WledClient {
 public:
   WledClient();
