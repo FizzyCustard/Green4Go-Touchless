@@ -23,7 +23,7 @@ private:
 
   int parseNextArrival(BodyStream &stream, char *lineOut, size_t lineLen,
                        int &secondOut);
-  static bool lineMatchesFilter(const String &lineName);
+  static bool lineMatchesFilter(const char *lineName);
 };
 
 #endif

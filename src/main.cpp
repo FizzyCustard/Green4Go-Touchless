@@ -15,25 +15,48 @@ StateManager *stateManager;
 // Over-the-air updates: `pio run -e esp32s3_ota -t upload` once the device
 // is on WiFi. The screen shows progress; the update blocks the loop while it
 // runs, then the device reboots into the new firmware.
+
+// Anyone on the LAN who knows the password can flash this device, so refuse
+// to build with the template value or a short one
+constexpr bool strEq(const char *a, const char *b) {
+  return *a == *b && (*a == '\0' || strEq(a + 1, b + 1));
+}
+static_assert(!strEq(OTA_PASSWORD, "change-me") &&
+                  !strEq(OTA_PASSWORD, "use-a-long-random-password"),
+              "Set your own OTA_PASSWORD in secrets.h (or remove it to "
+              "disable OTA)");
+static_assert(sizeof(OTA_PASSWORD) > 12,
+              "OTA_PASSWORD must be at least 12 characters");
+
 static bool otaReady = false;
+static bool otaInProgress = false;
 
 void setupOta() {
   ArduinoOTA.setHostname(OTA_HOSTNAME);
   ArduinoOTA.setPassword(OTA_PASSWORD);
   ArduinoOTA.onStart([]() {
     Serial.println("OTA: starting");
+    otaInProgress = true;
     displayManager->drawOtaProgress(0);
   });
   ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {
-    displayManager->drawOtaProgress(total ? done / (total / 100 + 1) : 0);
+    displayManager->drawOtaProgress(
+        total ? (unsigned int)((uint64_t)done * 100 / total) : 0);
   });
   ArduinoOTA.onEnd([]() {
     Serial.println("OTA: done, rebooting");
+    otaInProgress = false;
     displayManager->drawOtaProgress(100);
     displayManager->drawOtaMessage("Restarting...", C_GREEN);
   });
   ArduinoOTA.onError([](ota_error_t error) {
     Serial.printf("OTA: error %u\n", error);
+    // Only an upload that actually started takes over the screen. A bad
+    // password attempt (anyone on the LAN can send one) is just logged, and
+    // the library can report one failure twice, so show it once.
+    if (!otaInProgress)
+      return;
+    otaInProgress = false;
     displayManager->drawOtaMessage("Update failed", C_LIGHT_RED);
     delay(2000); // Leave the message up before the UI takes over again
   });
@@ -74,7 +97,7 @@ void maintainWiFi() {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Starting v2 App...");
+  Serial.printf("Green4Go starting (reset reason %d)\n", (int)esp_reset_reason());
 
   // Init Components
   sensor = new DistanceSensor(US_TRIG, US_ECHO);

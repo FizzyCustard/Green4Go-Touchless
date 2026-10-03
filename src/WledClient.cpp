@@ -3,13 +3,14 @@
 
 WledClient::WledClient() {
   _hasSavedState = false;
-  _savedState = "";
-  _backoffUntil = 0;
+  _restorePending = false;
+  _backoffStart = 0;
   _inBackoff = false;
 }
 
 void WledClient::begin() {
-  // Nothing specific to init for HTTP
+  // Reserve once up front, before TLS fragments the heap
+  _savedState.reserve(WLED_STATE_MAX_BYTES);
 }
 
 // WLED lives on the LAN, so a failed call means it's off or unplugged. Back
@@ -20,46 +21,52 @@ bool WledClient::ready(const char *what, bool ignoreBackoff) {
     Serial.printf("[WLED] %s skipped: WiFi not connected\n", what);
     return false;
   }
-  if (!ignoreBackoff && _inBackoff && (long)(millis() - _backoffUntil) < 0) {
+  if (_inBackoff && millis() - _backoffStart >= WLED_BACKOFF_MS)
+    _inBackoff = false;
+  if (_inBackoff && !ignoreBackoff) {
     Serial.printf("[WLED] %s skipped: WLED unreachable, backing off\n", what);
     return false;
   }
-  _inBackoff = false;
   return true;
 }
 
 void WledClient::noteResult(int httpCode) {
-  if (httpCode > 0)
+  if (httpCode > 0) {
+    _inBackoff = false;
     return;
+  }
   _inBackoff = true;
-  _backoffUntil = millis() + WLED_BACKOFF_MS;
+  _backoffStart = millis();
 }
 
 bool WledClient::buildUrl(String &url) {
-  // Validate WLED_IP length to prevent excessive memory usage
   if (strlen(WLED_IP) > MAX_IP_LENGTH) {
     Serial.println("[WLED] WLED_IP too long");
     return false;
   }
-  url = "http://" + String(WLED_IP) + "/json/state";
+  url = "http://" WLED_IP "/json/state";
   return url.length() <= MAX_URL_LENGTH;
 }
 
 // Returns the HTTP code, or 0 if the request was skipped
-int WledClient::sendRequest(String &jsonPayload, bool ignoreBackoff) {
+int WledClient::sendRequest(const char *json, bool ignoreBackoff) {
   String url;
   if (!ready("Send", ignoreBackoff) || !buildUrl(url))
     return 0;
 
-  Serial.printf("[WLED] Sending to %s: %s\n", url.c_str(), jsonPayload.c_str());
+  size_t len = strlen(json);
+  Serial.printf("[WLED] POST %u bytes\n", (unsigned)len);
 
   HTTPClient http;
+  // A fresh connection each time: a kept-alive socket goes stale when WLED
+  // reboots or WiFi drops, and the next command would vanish into it
+  http.setReuse(false);
   http.setConnectTimeout(WLED_TIMEOUT_MS);
   http.setTimeout(WLED_TIMEOUT_MS);
   http.begin(_client, url);
   http.addHeader("Content-Type", "application/json");
 
-  int httpCode = http.POST(jsonPayload);
+  int httpCode = http.POST((uint8_t *)json, len);
   noteResult(httpCode);
 
   if (httpCode > 0) {
@@ -73,75 +80,58 @@ int WledClient::sendRequest(String &jsonPayload, bool ignoreBackoff) {
   return httpCode;
 }
 
-// WLED JSON Presets
-// Removed start/stop to apply to full configured segment
-const char *PRESET_RAINBOW =
-    R"json({"on":true,"bri":200,"transition":7,"mainseg":0,"seg":[{"id":0,"grp":1,"spc":0,"of":0,"on":true,"frz":false,"bri":255,"cct":127,"set":0,"col":[[188,71,255],[0,0,0],[0,0,0]],"fx":9,"sx":128,"ix":128,"pal":0,"c1":128,"c2":128,"c3":16,"sel":true,"rev":false,"mi":false,"o1":false,"o2":false,"o3":false,"si":0,"m12":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0}]})json";
+// Presets only touch segment 0, so any other segments the user has set up
+// on their controller are left alone
+static const char PRESET_RAINBOW[] =
+    R"json({"on":true,"bri":200,"transition":7,"seg":[{"id":0,"on":true,"frz":false,"bri":255,"col":[[188,71,255],[0,0,0],[0,0,0]],"fx":9,"sx":128,"ix":128,"pal":0}]})json";
 
-const char *PRESET_COFFEE =
-    R"json({"on":true,"bri":200,"transition":7,"mainseg":0,"seg":[{"id":0,"grp":1,"spc":0,"of":0,"on":true,"frz":false,"bri":255,"cct":127,"set":0,"n":"","col":[[255,221,209],[0,0,0],[0,0,0]],"fx":0,"sx":128,"ix":128,"pal":0,"c1":128,"c2":128,"c3":16,"sel":true,"rev":false,"mi":false,"o1":false,"o2":false,"o3":false,"si":0,"m12":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0},{"stop":0}]})json";
+static const char PRESET_COFFEE[] =
+    R"json({"on":true,"bri":200,"transition":7,"seg":[{"id":0,"on":true,"frz":false,"bri":255,"col":[[255,221,209],[0,0,0],[0,0,0]],"fx":0,"pal":0}]})json";
 
-void WledClient::setRainbow() {
-  String json = String(PRESET_RAINBOW);
-  sendRequest(json);
-}
+// Blue breathe while a bus fetch is in flight
+static const char EFFECT_LOADING[] =
+    R"json({"on":true,"seg":[{"id":0,"fx":2,"sx":128,"ix":128,"col":[[0,0,255]]}]})json";
 
-void WledClient::setCoffee() {
-  String json = String(PRESET_COFFEE);
-  sendRequest(json);
-}
+// Fast green breathe: "go now"
+static const char EFFECT_LEAVE_NOW[] =
+    R"json({"on":true,"seg":[{"id":0,"fx":2,"sx":220,"ix":128,"col":[[0,255,0]]}]})json";
 
-void WledClient::setLoading() {
-  // Blue Breathing
-  // fx: 2 (Breathe), sx: 128 (Speed), ix: 128 (Intensity)
-  // col: [[0, 0, 255]] (Blue)
-  String json = "{\"seg\":[{\"fx\":2,\"sx\":128,\"ix\":128,\"col\":[[0,0,255]]}"
-                "],\"on\":true}";
-  Serial.println("[WLED] Setting Loading Animation");
-  sendRequest(json);
-}
+void WledClient::setRainbow() { sendRequest(PRESET_RAINBOW); }
+
+void WledClient::setCoffee() { sendRequest(PRESET_COFFEE); }
+
+void WledClient::setLoading() { sendRequest(EFFECT_LOADING); }
+
+void WledClient::setLeaveNow() { sendRequest(EFFECT_LEAVE_NOW); }
 
 void WledClient::updateForBusTime(int minutes) {
   if (minutes < 0)
     return;
 
-  // Logic (must match DisplayManager::drawBusScreen):
-  // Red: <= 5 mins OR > 12 mins
-  // Green: 6 - 9 mins
-  // Orange: 10 - 12 mins
+  // Same thresholds as the Bus screen (see Config.h)
+  const char *color;
+  if (minutes <= BUS_RED_MAX_MIN || minutes > BUS_ORANGE_MAX_MIN)
+    color = "255,0,0"; // Red: too soon to catch, or a long wait
+  else if (minutes <= BUS_GREEN_MAX_MIN)
+    color = "0,255,0"; // Green: comfortable
+  else
+    color = "255,165,0"; // Orange: getting long
 
-  String colorStr;
-  if (minutes <= 5) {
-    colorStr = "[[255,0,0]]"; // Red
-  } else if (minutes <= 9) {
-    colorStr = "[[0,255,0]]"; // Green
-  } else if (minutes <= 12) {
-    colorStr = "[[255,165,0]]"; // Orange
-  } else {
-    colorStr = "[[255,0,0]]"; // Red
-  }
-
-  // fx: 0 is Solid (Static).
-  // No start/stop specified -> applies to configured segment(s)
-  String json = "{\"seg\":[{\"fx\":0,\"col\":" + colorStr + "}],\"on\":true}";
-
-  Serial.printf("[WLED] Bus Update (%d mins), Sending: %s\n", minutes,
-                json.c_str());
-  sendRequest(json);
-}
-
-void WledClient::setLeaveNow() {
-  // Fast green breathe: "go now"
-  String json = "{\"seg\":[{\"fx\":2,\"sx\":220,\"ix\":128,\"col\":[[0,255,0]]}"
-                "],\"on\":true}";
-  Serial.println("[WLED] Leave now!");
+  char json[96];
+  snprintf(json, sizeof(json),
+           R"json({"on":true,"seg":[{"id":0,"fx":0,"col":[[%s]]}]})json",
+           color);
+  Serial.printf("[WLED] Bus colour for %d min\n", minutes);
   sendRequest(json);
 }
 
 void WledClient::saveState() {
+  // A new effect owns the strip now; any pending restore happens when it ends
+  _restorePending = false;
+
   if (_hasSavedState) {
     // A previous restore failed; the state we hold is the user's real one,
-    // whereas the strip is probably still showing the bus colour
+    // whereas the strip is probably still showing an effect
     Serial.println("[WLED] Keeping earlier unrestored state");
     return;
   }
@@ -150,6 +140,8 @@ void WledClient::saveState() {
     return;
 
   HTTPClient http;
+  http.setReuse(false);
+  http.useHTTP10(true); // Plain body, no chunking
   http.setConnectTimeout(WLED_TIMEOUT_MS);
   http.setTimeout(WLED_TIMEOUT_MS);
   http.begin(_client, url);
@@ -157,9 +149,38 @@ void WledClient::saveState() {
   int httpCode = http.GET();
   noteResult(httpCode);
   if (httpCode == HTTP_CODE_OK) {
-    _savedState = http.getString();
-    _hasSavedState = _savedState.length() > 0;
-    Serial.println("[WLED] State Saved");
+    // Read into the pre-reserved buffer, refusing anything oversized so a
+    // misbehaving controller can't eat the heap the TLS fetches need
+    int size = http.getSize();
+    WiFiClient &stream = http.getStream();
+    _savedState = "";
+    bool tooBig = size > WLED_STATE_MAX_BYTES;
+    unsigned long start = millis();
+    while (!tooBig && (size < 0 || (int)_savedState.length() < size) &&
+           millis() - start < WLED_TIMEOUT_MS * 2) {
+      int c = stream.read();
+      if (c < 0) {
+        if (!stream.connected())
+          break;
+        delay(1);
+        continue;
+      }
+      if (_savedState.length() >= WLED_STATE_MAX_BYTES) {
+        tooBig = true;
+        break;
+      }
+      _savedState += (char)c;
+    }
+
+    _hasSavedState = !tooBig && _savedState.length() > 0 &&
+                     _savedState.charAt(0) == '{';
+    if (_hasSavedState) {
+      Serial.printf("[WLED] State saved (%u bytes)\n",
+                    (unsigned)_savedState.length());
+    } else {
+      Serial.println("[WLED] State not saved: empty, invalid or too large");
+      _savedState = "";
+    }
   } else {
     Serial.printf("[WLED] Failed to save state: %s\n",
                   http.errorToString(httpCode).c_str());
@@ -170,17 +191,24 @@ void WledClient::saveState() {
 // The user picked new lights themselves, so there's nothing to go back to
 void WledClient::discardSavedState() {
   _hasSavedState = false;
+  _restorePending = false;
   _savedState = "";
 }
 
 void WledClient::restoreState() {
-  if (!_hasSavedState || _savedState.length() == 0)
+  if (!_hasSavedState || _savedState.length() == 0) {
+    _restorePending = false;
     return;
+  }
 
-  // Always try the restore, even during backoff: one blip mid-effect must
-  // not leave the lights stuck on the bus colour. Keep the saved state if it
-  // fails so a later restore can still put things back.
+  // Always try the restore, even during backoff: one blip must not leave the
+  // lights stuck on an effect. If it fails, keep the state and flag it so the
+  // network task retries until it lands.
   Serial.println("[WLED] Restoring State...");
-  if (sendRequest(_savedState, true) > 0)
+  if (sendRequest(_savedState.c_str(), true) > 0) {
     _hasSavedState = false;
+    _restorePending = false;
+  } else {
+    _restorePending = true;
+  }
 }
