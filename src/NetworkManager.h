@@ -52,11 +52,17 @@ public:
                      char *line, size_t lineLen);
   bool isBusFetchPending();
 
+  // How long the current command has been running (0 when idle). Used by the
+  // health check to spot a wedged task.
+  unsigned long busyForMs();
+  unsigned stackFreeBytes(); // Network task's lowest-ever free stack
+
 private:
   BusClient *_busClient;
   WledClient *_wledClient;
 
   QueueHandle_t _cmdQueue;
+  TaskHandle_t _task;
   portMUX_TYPE _lock = portMUX_INITIALIZER_UNLOCKED;
 
   // Guarded by _lock (written on core 0, read on core 1)
@@ -66,6 +72,7 @@ private:
   int _latestSecondSeconds;
   unsigned long _latestBusAt;
   char _latestLine[MAX_LINE_NAME_LENGTH + 1];
+  unsigned long _commandStartedAt; // 0 = idle
 
   void enqueue(NetworkAction action, int param = 0);
   static void networkTask(void *parameter);
