@@ -9,3 +9,8 @@
 
 # Personal settings (copy src/secrets.example.h to src/secrets.h)
 src/secrets.h
+
+# Editors / OS
+.idea/
+Thumbs.db
+compile_commands.json
