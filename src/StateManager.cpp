@@ -50,6 +50,7 @@ StateManager::StateManager(DistanceSensor *sensor, DisplayManager *display) {
   _lastMoveAt = millis();
 
   _lastHealthCheck = millis();
+  _heapLow = false;
   _lowHeapSince = 0;
   _lastBusOkAt = millis();
 
@@ -646,16 +647,18 @@ void StateManager::checkHealth() {
                 _networkManager->stackFreeBytes());
 
   if (maxBlock < HEALTH_MIN_HEAP_BLOCK) {
-    if (_lowHeapSince == 0)
-      _lowHeapSince = now | 1;
+    if (!_heapLow) {
+      _heapLow = true;
+      _lowHeapSince = now;
+    }
   } else {
-    _lowHeapSince = 0;
+    _heapLow = false;
   }
 
   const char *reason = nullptr;
   if (_networkManager->busyForMs() > HEALTH_NET_STUCK_MS)
     reason = "network task stuck";
-  else if (_lowHeapSince && now - _lowHeapSince > HEALTH_LOW_HEAP_RESTART_MS)
+  else if (_heapLow && now - _lowHeapSince > HEALTH_LOW_HEAP_RESTART_MS)
     reason = "heap too fragmented for TLS";
   else if (WiFi.status() == WL_CONNECTED &&
            now - _lastBusOkAt > HEALTH_NO_DATA_RESTART_MS)

@@ -13,6 +13,7 @@ NetworkManager::NetworkManager(BusClient *busClient, WledClient *wledClient) {
   _latestSecondSeconds = -1;
   _latestBusAt = 0;
   _latestLine[0] = '\0';
+  _commandRunning = false;
   _commandStartedAt = 0;
 }
 
@@ -82,9 +83,10 @@ bool NetworkManager::takeBusResult(int &seconds, int &second,
 
 unsigned long NetworkManager::busyForMs() {
   portENTER_CRITICAL(&_lock);
+  bool running = _commandRunning;
   unsigned long started = _commandStartedAt;
   portEXIT_CRITICAL(&_lock);
-  return started ? millis() - started : 0;
+  return running ? millis() - started : 0;
 }
 
 unsigned NetworkManager::stackFreeBytes() {
@@ -120,7 +122,8 @@ void NetworkManager::networkTask(void *parameter) {
       continue;
 
     portENTER_CRITICAL(&self->_lock);
-    self->_commandStartedAt = millis() | 1; // Never 0 while busy
+    self->_commandStartedAt = millis();
+    self->_commandRunning = true;
     portEXIT_CRITICAL(&self->_lock);
 
     {
@@ -176,7 +179,7 @@ void NetworkManager::networkTask(void *parameter) {
     }
 
     portENTER_CRITICAL(&self->_lock);
-    self->_commandStartedAt = 0;
+    self->_commandRunning = false;
     portEXIT_CRITICAL(&self->_lock);
   }
 }

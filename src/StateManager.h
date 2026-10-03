@@ -63,7 +63,8 @@ private:
 
   // Health monitor
   unsigned long _lastHealthCheck;
-  unsigned long _lowHeapSince; // 0 = heap fine
+  bool _heapLow;
+  unsigned long _lowHeapSince;
   unsigned long _lastBusOkAt;
 
   // Bus data. Stored as "seconds at fetch time" so the display can count
