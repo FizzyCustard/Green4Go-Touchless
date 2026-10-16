@@ -58,7 +58,7 @@ Effects borrow the strip and give it back:
 
 1. The first effect to take the strip saves the user's current WLED state.
 2. While the Bus screen is open, the strip shows a blue breathe while loading, then the bus status colour for 10s.
-3. The leave-now alert outranks the bus effect: it takes over without saving again.
+3. The leave-now pulse outranks the bus effect: it takes over without saving again.
 4. When the effect ends, the saved state is restored. A failed restore is retried every 30s until it lands.
 5. Choosing Rainbow or Coffee discards any saved state, so a later restore never undoes your choice.
 
@@ -66,7 +66,13 @@ All payloads only touch segment 0, leaving any other segments alone. WLED calls 
 
 ## Leave-now alert
 
-During `LEAVE_ALERT_DAYS` between `LEAVE_ALERT_START_HHMM` and `LEAVE_ALERT_END_HHMM` (local time via NTP), if either of the next two buses is between `LEAVE_WINDOW_MAX_MIN` and `LEAVE_WINDOW_MIN_MIN` minutes away, the strip does a fast green breathe and standby shows LEAVE NOW with that bus's time. It wakes a sleeping screen, and stays off until the clock has synced.
+During `LEAVE_ALERT_DAYS` between `LEAVE_ALERT_START_HHMM` and `LEAVE_ALERT_END_HHMM` (local time via NTP), if either of the next two buses is between `LEAVE_WINDOW_MAX_MIN` and `LEAVE_WINDOW_MIN_MIN` minutes away, standby shows LEAVE NOW with that bus's time for the whole window, and the strip does a fast green breathe for `LEAVE_PULSE_MS` (3s) before going back to what it was showing. It wakes a sleeping screen, and stays off until the clock has synced. If the lights are coffee white there's no pulse: the status LEDs already show it.
+
+## Bus status on the coffee light
+
+Whenever the lights are coffee white (any day, any time), the first `STATUS_LEDS` (6) LEDs show the next bus you can still catch: red at `STATUS_RED_MIN` (15) minutes or more, fading to orange at `STATUS_ORANGE_MIN` (10), then to green at `LEAVE_WINDOW_MAX_MIN` (8). It holds green through the leave window, and turns red once the bus is under `LEAVE_WINDOW_MIN_MIN` (6) and there's no later bus to show. The rest of the strip stays white.
+
+Every `STATUS_TICK_MS` (10s) the device reads the strip's state and only touches it if segment 0 is on, solid and exactly the coffee colour, so picking another look in the WLED app turns the status off. Drawing the LEDs freezes the segment; the device only sends an update when the colour changes, or when something has repainted the strip. While an effect has the lights it waits, and catches up as soon as they're handed back.
 
 ## Reliability
 

@@ -55,6 +55,9 @@ private:
   WledOwner _wledOwner;
   unsigned long _lastPresenceTime; // For display sleep
   bool _leaveAlertActive;
+  unsigned long _leavePulseAt;       // When the green pulse started
+  unsigned long _lastCoffeeStatusAt; // Last coffee status update
+  bool _coffeeStatusDue;             // Update on the next tick regardless
 
   // Hand vs static object: something that hasn't moved for STATIC_OBJECT_MS
   // (a mug, the kettle) stops counting as someone being there
@@ -112,6 +115,8 @@ private:
   int leaveAlertMinutes();
   bool busNearLeaveWindow();
   void updateLeaveAlert();
+  int coffeeStatusSeconds();
+  void updateCoffeeStatus();
   void updateDisplaySleep(float dist);
 
   // Presence & health

@@ -19,12 +19,13 @@ enum NetworkAction {
   ACT_WLED_SAVE,
   ACT_WLED_RESTORE,
   ACT_WLED_LEAVE_NOW,
-  ACT_WLED_DISCARD
+  ACT_WLED_DISCARD,
+  ACT_WLED_COFFEE_STATUS
 };
 
 struct NetworkCommand {
   NetworkAction action;
-  int param; // Used for bus minutes
+  int param; // Bus minutes, or seconds for the coffee status
 };
 
 class NetworkManager {
@@ -43,6 +44,9 @@ public:
   void requestWledRestoreState();
   void requestWledLeaveNow();
   void requestWledDiscardSaved();
+  // Checks for coffee white and updates its status LEDs for a bus this many
+  // seconds away (-1 for none). Skipped if one is already queued or running.
+  void requestWledCoffeeStatus(int seconds);
 
   // Retrieve results. Returns true (once) when a new fetch has finished.
   // seconds is time to the next bus or a negative BUS_* code, second the
@@ -51,6 +55,9 @@ public:
   bool takeBusResult(int &seconds, int &second, unsigned long &completedAt,
                      char *line, size_t lineLen);
   bool isBusFetchPending();
+
+  // Whether the lights were coffee white at the last status check
+  bool coffeeLightsOn();
 
   // How long the current command has been running (0 when idle). Used by the
   // health check to spot a wedged task.
@@ -68,6 +75,8 @@ private:
   // Guarded by _lock (written on core 0, read on core 1)
   bool _busDataReady;
   bool _busFetchPending;
+  bool _coffeeStatusPending;
+  bool _coffeeOn;
   int _latestBusSeconds;
   int _latestSecondSeconds;
   unsigned long _latestBusAt;

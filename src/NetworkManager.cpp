@@ -9,6 +9,8 @@ NetworkManager::NetworkManager(BusClient *busClient, WledClient *wledClient) {
   _task = nullptr;
   _busDataReady = false;
   _busFetchPending = false;
+  _coffeeStatusPending = false;
+  _coffeeOn = false;
   _latestBusSeconds = BUS_LOADING;
   _latestSecondSeconds = -1;
   _latestBusAt = 0;
@@ -31,11 +33,12 @@ void NetworkManager::enqueue(NetworkAction action, int param) {
   NetworkCommand cmd = {action, param};
   if (!_cmdQueue || xQueueSend(_cmdQueue, &cmd, 0) != pdTRUE) {
     Serial.printf("[Net] Queue full, dropped action %d\n", action);
-    if (action == ACT_FETCH_BUS) {
-      portENTER_CRITICAL(&_lock);
+    portENTER_CRITICAL(&_lock);
+    if (action == ACT_FETCH_BUS)
       _busFetchPending = false;
-      portEXIT_CRITICAL(&_lock);
-    }
+    else if (action == ACT_WLED_COFFEE_STATUS)
+      _coffeeStatusPending = false;
+    portEXIT_CRITICAL(&_lock);
   }
 }
 
@@ -58,6 +61,15 @@ void NetworkManager::requestWledSaveState() { enqueue(ACT_WLED_SAVE); }
 void NetworkManager::requestWledRestoreState() { enqueue(ACT_WLED_RESTORE); }
 void NetworkManager::requestWledLeaveNow() { enqueue(ACT_WLED_LEAVE_NOW); }
 void NetworkManager::requestWledDiscardSaved() { enqueue(ACT_WLED_DISCARD); }
+
+void NetworkManager::requestWledCoffeeStatus(int seconds) {
+  portENTER_CRITICAL(&_lock);
+  bool alreadyPending = _coffeeStatusPending;
+  _coffeeStatusPending = true;
+  portEXIT_CRITICAL(&_lock);
+  if (!alreadyPending)
+    enqueue(ACT_WLED_COFFEE_STATUS, seconds);
+}
 
 // --- Status Retrieval ---
 
@@ -98,6 +110,13 @@ bool NetworkManager::isBusFetchPending() {
   bool pending = _busFetchPending;
   portEXIT_CRITICAL(&_lock);
   return pending;
+}
+
+bool NetworkManager::coffeeLightsOn() {
+  portENTER_CRITICAL(&_lock);
+  bool on = _coffeeOn;
+  portEXIT_CRITICAL(&_lock);
+  return on;
 }
 
 // --- Background Task ---
@@ -175,6 +194,15 @@ void NetworkManager::networkTask(void *parameter) {
       case ACT_WLED_DISCARD:
         self->_wledClient->discardSavedState();
         break;
+
+      case ACT_WLED_COFFEE_STATUS: {
+        bool coffee = self->_wledClient->updateCoffeeStatus(cmd.param);
+        portENTER_CRITICAL(&self->_lock);
+        self->_coffeeOn = coffee;
+        self->_coffeeStatusPending = false;
+        portEXIT_CRITICAL(&self->_lock);
+        break;
+      }
       }
     }
 

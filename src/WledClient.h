@@ -19,6 +19,10 @@ public:
   void updateForBusTime(int minutes);
   void setLeaveNow();
 
+  // If the lights are coffee white, colours the status LEDs for a bus this
+  // many seconds away (-1 for none: plain white). Returns whether they were.
+  bool updateCoffeeStatus(int seconds);
+
   // Effects save the user's state first and restore it afterwards
   void saveState();
   void restoreState();
@@ -32,7 +36,9 @@ private:
   bool _restorePending; // A restore failed and should be retried
   unsigned long _backoffStart;
   bool _inBackoff;
+  char _status[96]; // Last status sent ("" = send again on the next update)
 
+  bool readCoffee(int &len, bool &frozen);
   bool ready(const char *what, bool ignoreBackoff = false);
   bool buildUrl(String &url);
   void noteResult(int httpCode);
