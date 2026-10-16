@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Features
+- Bus status on the coffee light: while the lights are coffee white, the first six LEDs fade from red to orange to green as the next catchable bus approaches the leave window, then go red. Replaces the green pulse while coffee white is on.
+- The green leave-now pulse now plays for 3 seconds instead of the whole window. LEAVE NOW still shows on screen throughout.
+
 ## 1.0.0
 
 First public release.

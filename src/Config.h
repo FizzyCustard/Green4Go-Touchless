@@ -118,7 +118,20 @@
 #define LEAVE_ALERT_END_HHMM 930   // 09:30
 #define LEAVE_REFRESH_MS 20000     // Refresh this often when a bus is getting close
 #define LEAVE_REFRESH_LEAD_MIN 4   // ...i.e. within the window plus this lead
+#define LEAVE_PULSE_MS 3000        // The green pulse plays this long, then the lights go back
 #define TIMEZONE "GMT0BST,M3.5.0/1,M10.5.0" // UK time incl. BST
+
+// --- Bus status on the coffee light ---
+// Whenever the lights are coffee white (any day, any time), the first few
+// LEDs show the next bus you can still catch: red while it's a long way off,
+// fading to orange as it gets close, green inside the leave window, then red
+// again once it's gone. The rest of the strip stays white. While coffee white
+// is on, this replaces the green leave-now pulse.
+#define STATUS_LEDS 6            // LEDs at the start of the strip (LED 0 up)
+#define STATUS_BRIGHTNESS 100    // % of full colour, independent of the white
+#define STATUS_RED_MIN 15        // Fully red at or beyond this many minutes...
+#define STATUS_ORANGE_MIN 10     // ...orange here, green from LEAVE_WINDOW_MAX_MIN
+#define STATUS_TICK_MS 10000     // Check the lights and update the colour this often
 #define NTP_SERVER_1 "pool.ntp.org"
 #define NTP_SERVER_2 "time.google.com"
 #define NTP_VALID_EPOCH 1700000000L // Clock before this = NTP not synced yet

@@ -45,6 +45,9 @@ StateManager::StateManager(DistanceSensor *sensor, DisplayManager *display) {
   _wledOwner = WLED_NONE;
   _lastPresenceTime = millis();
   _leaveAlertActive = false;
+  _leavePulseAt = 0;
+  _lastCoffeeStatusAt = 0;
+  _coffeeStatusDue = true;
 
   _moveRefDist = -1;
   _lastMoveAt = millis();
@@ -138,6 +141,7 @@ void StateManager::update() {
   if (_currentState != BOOT_WARMUP) {
     maintainBusData();
     updateLeaveAlert();
+    updateCoffeeStatus();
   }
   updateDisplaySleep(dist);
 
@@ -188,6 +192,12 @@ void StateManager::update() {
   if (_wledOwner == WLED_BUS &&
       millis() - _busEffectStartTime > BUS_EFFECT_TIMEOUT_MS) {
     endBusEffect();
+  }
+
+  // The leave-now pulse is just a nudge: hand the lights back after a moment
+  if (_wledOwner == WLED_LEAVE && millis() - _leavePulseAt > LEAVE_PULSE_MS) {
+    _networkManager->requestWledRestoreState();
+    _wledOwner = WLED_NONE;
   }
 }
 
@@ -373,11 +383,13 @@ void StateManager::actionLights(int row) {
   if (row == 0) { // Rainbow
     takeBackLights();
     _networkManager->requestWledRainbow();
+    _coffeeStatusDue = true;
     goToState(SHOWING_SUCCESS);
     _display->drawSuccessScreen("Rainbow!");
   } else if (row == 1) { // Coffee (warm white)
     takeBackLights();
     _networkManager->requestWledCoffee();
+    _coffeeStatusDue = true; // Show the status straight away
     goToState(SHOWING_SUCCESS);
     _display->drawSuccessScreen("Coffee");
   } else if (row == 2) { // Back
@@ -599,14 +611,48 @@ void StateManager::updateLeaveAlert() {
 
   if (want) {
     Serial.println("[Alert] Leave now");
-    if (_wledOwner == WLED_NONE)
-      _networkManager->requestWledSaveState();
-    _wledOwner = WLED_LEAVE; // Takes over from the bus effect if running
-    _networkManager->requestWledLeaveNow();
+    // On coffee white the status LEDs already say it; otherwise a short pulse
+    if (!_networkManager->coffeeLightsOn()) {
+      if (_wledOwner == WLED_NONE)
+        _networkManager->requestWledSaveState();
+      _wledOwner = WLED_LEAVE; // Takes over from the bus effect if running
+      _leavePulseAt = millis();
+      _networkManager->requestWledLeaveNow();
+    }
   } else if (_wledOwner == WLED_LEAVE) {
     _networkManager->requestWledRestoreState();
     _wledOwner = WLED_NONE;
   }
+}
+
+// --- Bus status on the coffee light ---
+
+// Seconds to the bus the status LEDs should show: the next one, or the one
+// after if the next is already past the leave window (if that's gone too,
+// it shows red). -1 if there's no data worth showing.
+int StateManager::coffeeStatusSeconds() {
+  if (_busSeconds < 0 || millis() - _busAt > BUS_STALE_MS)
+    return -1;
+  long first = remainingSeconds(_busSeconds);
+  long second = remainingSeconds(_busSecond);
+  if (first < LEAVE_WINDOW_MIN_MIN * 60L && second >= 0)
+    return second;
+  return first;
+}
+
+// Runs whatever the day or time. WledClient checks the lights really are
+// coffee white before touching them, and the answer also decides whether
+// the leave-now alert pulses.
+void StateManager::updateCoffeeStatus() {
+  if (_wledOwner != WLED_NONE) {
+    _coffeeStatusDue = true; // An effect has the lights; catch up after
+    return;
+  }
+  if (!_coffeeStatusDue && millis() - _lastCoffeeStatusAt < STATUS_TICK_MS)
+    return;
+  _coffeeStatusDue = false;
+  _lastCoffeeStatusAt = millis();
+  _networkManager->requestWledCoffeeStatus(coffeeStatusSeconds());
 }
 
 // --- Display sleep ---

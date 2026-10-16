@@ -6,6 +6,7 @@ WledClient::WledClient() {
   _restorePending = false;
   _backoffStart = 0;
   _inBackoff = false;
+  _status[0] = '\0';
 }
 
 void WledClient::begin() {
@@ -50,6 +51,9 @@ bool WledClient::buildUrl(String &url) {
 
 // Returns the HTTP code, or 0 if the request was skipped
 int WledClient::sendRequest(const char *json, bool ignoreBackoff) {
+  // Anything else sent may have painted over the status LEDs
+  _status[0] = '\0';
+
   String url;
   if (!ready("Send", ignoreBackoff) || !buildUrl(url))
     return 0;
@@ -85,6 +89,12 @@ int WledClient::sendRequest(const char *json, bool ignoreBackoff) {
 static const char PRESET_RAINBOW[] =
     R"json({"on":true,"bri":200,"transition":7,"seg":[{"id":0,"on":true,"frz":false,"bri":255,"col":[[188,71,255],[0,0,0],[0,0,0]],"fx":9,"sx":128,"ix":128,"pal":0}]})json";
 
+// Coffee white. The status LEDs only show while segment 0 is this colour.
+#define COFFEE_R 255
+#define COFFEE_G 221
+#define COFFEE_B 209
+#define COFFEE_HEX "FFDDD1"
+
 static const char PRESET_COFFEE[] =
     R"json({"on":true,"bri":200,"transition":7,"seg":[{"id":0,"on":true,"frz":false,"bri":255,"col":[[255,221,209],[0,0,0],[0,0,0]],"fx":0,"pal":0}]})json";
 
@@ -103,6 +113,124 @@ void WledClient::setCoffee() { sendRequest(PRESET_COFFEE); }
 void WledClient::setLoading() { sendRequest(EFFECT_LOADING); }
 
 void WledClient::setLeaveNow() { sendRequest(EFFECT_LEAVE_NOW); }
+
+// --- Bus status on the coffee light ---
+
+// Reads 4 bytes and checks for "true" (a JSON false reads as "fals")
+static bool readTrue(Stream &s) {
+  char b[4];
+  return s.readBytes(b, 4) == 4 && memcmp(b, "true", 4) == 0;
+}
+
+// Reads the strip's state and reports whether segment 0 is showing coffee
+// white: on, solid, coffee colour. Also returns the segment's length and
+// whether it's frozen (drawing individual LEDs freezes it). Relies on the
+// key order WLED writes: top-level "on" first, then per segment "len",
+// "on", "frz", "col", "fx". Anything unexpected reads as "not coffee".
+bool WledClient::readCoffee(int &len, bool &frozen) {
+  String url;
+  if (!ready("Status") || !buildUrl(url))
+    return false;
+
+  HTTPClient http;
+  http.setReuse(false);
+  http.useHTTP10(true); // Plain body, no chunking
+  http.setConnectTimeout(WLED_TIMEOUT_MS);
+  http.setTimeout(WLED_TIMEOUT_MS);
+  http.begin(_client, url);
+
+  int httpCode = http.GET();
+  noteResult(httpCode);
+  bool coffee = false;
+  if (httpCode == HTTP_CODE_OK) {
+    Stream &s = http.getStream();
+    s.setTimeout(WLED_TIMEOUT_MS);
+    int r = 0, g = 0, b = 0;
+    if (s.find("\"on\":") && readTrue(s) && s.find("\"seg\":[") &&
+        s.find("\"len\":")) {
+      len = s.parseInt();
+      if (s.find("\"on\":") && readTrue(s) && s.find("\"frz\":")) {
+        frozen = readTrue(s);
+        if (s.find("\"col\":[[")) {
+          r = s.parseInt();
+          g = s.parseInt();
+          b = s.parseInt();
+          coffee = r == COFFEE_R && g == COFFEE_G && b == COFFEE_B &&
+                   s.find("\"fx\":") && s.parseInt() == 0 && len > 0;
+        }
+      }
+    }
+  } else {
+    Serial.printf("[WLED] Status check failed: %s\n",
+                  http.errorToString(httpCode).c_str());
+  }
+  http.end();
+  return coffee;
+}
+
+// Status colour for a bus `seconds` away, scaled by STATUS_BRIGHTNESS
+static void statusColour(int seconds, char *hex, size_t size) {
+  static const int RED[3] = {255, 0, 0};
+  static const int ORANGE[3] = {255, 110, 0};
+  static const int GREEN[3] = {0, 255, 0};
+  const int *from = RED, *to = RED;
+  float t = 0; // How far from `from` to `to`
+  float m = seconds / 60.0f;
+
+  if (m < LEAVE_WINDOW_MIN_MIN) {
+    // Past the window: too late for this one
+  } else if (m <= LEAVE_WINDOW_MAX_MIN) {
+    from = to = GREEN;
+  } else if (m <= STATUS_ORANGE_MIN) {
+    from = GREEN;
+    to = ORANGE;
+    t = (m - LEAVE_WINDOW_MAX_MIN) / (STATUS_ORANGE_MIN - LEAVE_WINDOW_MAX_MIN);
+  } else if (m <= STATUS_RED_MIN) {
+    from = ORANGE;
+    to = RED;
+    t = (m - STATUS_ORANGE_MIN) / (STATUS_RED_MIN - STATUS_ORANGE_MIN);
+  }
+
+  int c[3];
+  for (int i = 0; i < 3; i++)
+    c[i] = (int)((from[i] + (to[i] - from[i]) * t) * STATUS_BRIGHTNESS / 100 +
+                 0.5f);
+  snprintf(hex, size, "%02X%02X%02X", c[0], c[1], c[2]);
+}
+
+bool WledClient::updateCoffeeStatus(int seconds) {
+  int len = 0;
+  bool frozen = false;
+  if (!readCoffee(len, frozen)) {
+    _status[0] = '\0';
+    return false;
+  }
+
+  char json[sizeof(_status)];
+  bool show = seconds >= 0;
+  if (show) {
+    char hex[7];
+    statusColour(seconds, hex, sizeof(hex));
+    int n = len < STATUS_LEDS ? len : STATUS_LEDS;
+    snprintf(json, sizeof(json),
+             R"json({"seg":[{"id":0,"i":[0,%d,"%s",%d,%d,")json" COFFEE_HEX
+             R"json("]}]})json",
+             n, hex, n, len);
+  } else {
+    // Unfreezing hands the strip back to the plain white effect
+    snprintf(json, sizeof(json), R"json({"seg":[{"id":0,"frz":false}]})json");
+  }
+
+  // Already showing? Drawing freezes the segment, so a thawed one means
+  // something (like reselecting coffee) has repainted it since
+  if (strcmp(json, _status) == 0 && frozen == show)
+    return true;
+  if (sendRequest(json) > 0) {
+    strncpy(_status, json, sizeof(_status) - 1);
+    _status[sizeof(_status) - 1] = '\0';
+  }
+  return true;
+}
 
 void WledClient::updateForBusTime(int minutes) {
   if (minutes < 0)
