@@ -1,6 +1,6 @@
 # Interaction Model
 
-An HC-SR04 (`DistanceSensor`) gives one smoothed distance per 50ms tick. `StateManager` maps it to rows on the 240x320 ST7789 (`DisplayManager`): 0-15cm over the three 80px content rows (y 0-240), 15-25cm over the 80px base strip (y 240-320).
+An HC-SR04 (`DistanceSensor`) gives one smoothed distance per 50ms tick. `StateManager` maps it to rows on the 240x320 ST7789 (`DisplayManager`): 4-22cm over the three 80px content rows (y 0-240), 22-32cm over the 80px base strip (y 240-320).
 
 ## Zones with hysteresis (`StateManager::calculateZone`)
 
@@ -8,18 +8,20 @@ An HC-SR04 (`DistanceSensor`) gives one smoothed distance per 50ms tick. `StateM
 int StateManager::calculateZone(float dist, int numZones, int prevZone) {
   if (numZones <= 0 || dist < 0)
     return ROW_NONE;
-  float zoneSize = MAX_INTERACTION_DISTANCE / numZones; // 15 / 3 = 5cm
+  float zoneSize =
+      (MAX_INTERACTION_DISTANCE - MIN_INTERACTION_DISTANCE) / numZones; // 18 / 3 = 6cm
+  float pos = dist - MIN_INTERACTION_DISTANCE;
 
   // Stay in the current zone until ZONE_HYSTERESIS_CM past its edge
   if (prevZone >= 0 && prevZone < numZones) {
     float lo = prevZone * zoneSize - ZONE_HYSTERESIS_CM;
     float hi = (prevZone + 1) * zoneSize + ZONE_HYSTERESIS_CM;
-    if (dist >= lo && dist <= hi)
+    if ((prevZone == 0 || pos >= lo) && pos <= hi) // zone 0 has no inner edge
       return prevZone;
   }
   if (dist > MAX_INTERACTION_DISTANCE)
     return ROW_NONE;
-  int zone = (int)(dist / zoneSize);
+  int zone = (int)(pos / zoneSize);
   if (zone >= numZones)
     zone = numZones - 1;
   if (zone < 0)
@@ -28,7 +30,7 @@ int StateManager::calculateZone(float dist, int numZones, int prevZone) {
 }
 ```
 
-Fresh entry boundaries: zone 0 = 0-5cm, zone 1 = 5-10cm, zone 2 = 10-15cm. Once in zone 1 the hand stays there from 4.5cm to 10.5cm.
+Fresh entry boundaries: zone 0 = up to 10cm, zone 1 = 10-16cm, zone 2 = 16-22cm. Once in zone 1 the hand stays there from 8.75cm to 17.25cm.
 
 Constants: `ROW_NONE = -1`, `ROW_UNSET = -2` (disarmed, no reading yet on this screen).
 
@@ -57,13 +59,22 @@ if (!_armed) {
   if (arm) {
     _armed = true;
     _zoneStartTime = now;                         // dwell counts from arming
+    _lastZoneIdx = row;
+    _graceRow = ROW_NONE;                         // no resuming older dwells
   }
 }
 
-// Dwell: restart the clock whenever the row changes
+// Dwell: restart the clock when the row changes, unless the hand is back
+// on the row it left less than DWELL_GRACE_MS ago (then resume it)
 if (row != _lastZoneIdx) {
+  unsigned long start = now;
+  if (row >= 0 && row == _graceRow && now - _graceLeftAt <= DWELL_GRACE_MS)
+    start = _graceStart + (now - _graceLeftAt);
+  _graceRow = _lastZoneIdx;
+  _graceStart = _zoneStartTime;
+  _graceLeftAt = now;
   _lastZoneIdx = row;
-  _zoneStartTime = now;
+  _zoneStartTime = start;
 }
 float progress = 0;
 if (_armed && row >= 0)
@@ -116,6 +127,10 @@ else if (_missCount < SENSOR_MAX_MISSES && _lastValid >= 0) { _missCount++; dist
 else                                  dist = SENSOR_FAR_CM;   // 100cm: hand gone
 
 filtered = median of last 3 dist values (dist itself until 3 collected);
-_smoothedDist = SENSOR_EMA_ALPHA * filtered + (1 - SENSOR_EMA_ALPHA) * _smoothedDist;
+// One-euro filter: cutoff rises with speed
+float rawSpeed = (filtered - _smoothedDist) / dt;
+_speed += lowPassAlpha(SENSOR_DCUTOFF_HZ, dt) * (rawSpeed - _speed);
+float cutoff = SENSOR_MIN_CUTOFF_HZ + SENSOR_BETA * fabsf(_speed);
+_smoothedDist += lowPassAlpha(cutoff, dt) * (filtered - _smoothedDist);
 ```
 `getSmoothedDistance()` returns -1 before the first reading.

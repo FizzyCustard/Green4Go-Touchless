@@ -11,19 +11,19 @@ All interaction is one number: the smoothed hand distance from `DistanceSensor::
 | Distance | Meaning |
 |---|---|
 | < 3cm (`UNLOCK_DISTANCE_CM`), held 1s | Unlock from standby (cancel if > 5cm: + `UNLOCK_HYSTERESIS_CM`) |
-| 0-15cm (`MAX_INTERACTION_DISTANCE`) | Three 5cm zones = the three 80px screen rows. Zone 0 (closest) = top row |
-| 15-25cm (`BASE_ACTIVE_MIN/MAX_DISTANCE`) | Base zone: "Closer to select" strip lights up; on the Timer screen it opens the menu |
-| > 30cm (`TIMER_MENU_CLOSE_DISTANCE`) | Closes the timer menu (and arms it, see below) |
-| < 25cm and moved recently | Counts as a hand being present (keeps screen awake) |
+| 4-22cm (`MIN/MAX_INTERACTION_DISTANCE`) | Three 6cm zones = the three 80px screen rows. Zone 0 (closest) = top row; closer than 4cm also counts as zone 0 |
+| 22-32cm (`BASE_ACTIVE_MIN/MAX_DISTANCE`) | Base zone: "Closer to select" strip lights up; on the Timer screen it opens the menu |
+| > 37cm (`TIMER_MENU_CLOSE_DISTANCE`) | Closes the timer menu (and arms it, see below) |
+| < 32cm and moved recently | Counts as a hand being present (keeps screen awake) |
 
 ## Rules for every interactive screen
-- **Always three zones, rows line up with zones.** Every screen is three 5cm zones over three 80px rows; don't change `numZones` per screen. A screen whose top row is information only sets `firstRow = 1` so zone 0 selects nothing:
+- **Always three zones, rows line up with zones.** Every screen is three 6cm zones over three 80px rows; don't change `numZones` per screen. A screen whose top row is information only sets `firstRow = 1` so zone 0 selects nothing:
   - Main menu: 0 Timer, 1 Bus Times, 2 Lights
   - Lights: 0 Rainbow, 1 Coffee, 2 Back
   - Timer: 0 timer (info), 1 Reset, 2 Back (only while the menu is open)
   - Bus Times: 0 bus info, 1 Refresh, 2 Back
-- **Zone hysteresis.** `calculateZone(dist, numZones, prevZone)` keeps the current zone until the hand is `ZONE_HYSTERESIS_CM` (0.5cm) past its edge. `_rawZone` is the previous zone and is **not** reset on screen change (all screens share the geometry), so the hysteresis carries across screens.
-- **Dwell to select.** Holding a selectable row for `DWELL_THRESHOLD_MS` (1s) selects it. Progress (0..1) is drawn as a bar along the bottom of the row by `drawDwellProgress(row, progress)`. Never select on a distance change alone, and never use `delay()`.
+- **Zone hysteresis.** `calculateZone(dist, numZones, prevZone)` keeps the current zone until the hand is `ZONE_HYSTERESIS_CM` (1.25cm) past its edge. Zone 0 has no inner edge (a hand closer than 4cm stays on it). `_rawZone` is the previous zone and is **not** reset on screen change (all screens share the geometry), so the hysteresis carries across screens.
+- **Dwell to select.** Holding a selectable row for `DWELL_THRESHOLD_MS` (1s) selects it. Progress (0..1) is drawn as a bar along the bottom of the row by `drawDwellProgress(row, progress)`. Never select on a distance change alone, and never use `delay()`. **Dwell grace:** leaving a row and returning within `DWELL_GRACE_MS` (250ms) resumes its dwell (`_graceRow/_graceStart/_graceLeftAt`); arming and `disarm()` clear it so a dwell from before a selection can never resume.
 - **Re-arm rule (no double selections).** `handleSelection()` and every `goToState()` call `disarm()`. While disarmed, nothing can be selected until the hand either leaves the rows (row becomes `ROW_NONE`) or moves to a *different* row **and** more than `REARM_DISTANCE_CM` (2cm) from where it was when disarmed. The first reading after disarming records the row (`ROW_UNSET` -> row). There is no time-based input lockout.
 - **All screen changes go through `goToState()`.** It disarms, resets dwell and the standby timer, gives back bus lights when leaving Bus Times, and stops the timer when leaving the Timer screen.
 - **Base strip and cursor** (`updateBaseZone`, `setHandCursor`) are drawn after the screen, and skipped on the tick a state changes so the new screen sets up its layout first.
@@ -31,16 +31,17 @@ All interaction is one number: the smoothed hand distance from `DistanceSensor::
 - Interactive screens drop to standby after `STANDBY_TIMEOUT_MS` (30s) without a present hand; a running timer extends this to `TIMER_AWAKE_MAX_MS` (1h).
 
 ## Timer screen menu
-The menu (Reset / Back) slides up when the hand enters the base zone and closes when it goes beyond 30cm. **Arming:** after choosing Timer, the menu cannot open until the hand has first gone beyond 30cm (`_timerMenuArmed`), because the hand that picked Timer passes through the base zone on its way out. While the menu is hidden, toggling, or animating (`_display->isAnimating()`), `numZones` is 0 so nothing is selectable.
+The menu (Reset / Back) slides up when the hand enters the base zone and closes when it goes beyond 37cm. **Arming:** after choosing Timer, the menu cannot open until the hand has first gone beyond 37cm (`_timerMenuArmed`), because the hand that picked Timer passes through the base zone on its way out. While the menu is hidden, toggling, or animating (`_display->isAnimating()`), `numZones` is 0 so nothing is selectable.
 
 ## Presence and static objects
-`trackMovement()` resets `_lastMoveAt` whenever the distance changes by more than `MOVE_THRESHOLD_CM` (1cm). `handPresent(dist)` = `dist < 25cm` **and** moved within `STATIC_OBJECT_MS` (60s). A mug or kettle in front of the sensor therefore stops keeping the screen awake, re-unlocking it, or waking the backlight after a minute. Use `handPresent()`, not a raw distance check, for anything "is someone there".
+`trackMovement()` resets `_lastMoveAt` whenever the distance changes by more than `MOVE_THRESHOLD_CM` (1cm). `handPresent(dist)` = `dist < 32cm` **and** moved within `STATIC_OBJECT_MS` (60s). A mug or kettle in front of the sensor therefore stops keeping the screen awake, re-unlocking it, or waking the backlight after a minute. Use `handPresent()`, not a raw distance check, for anything "is someone there".
 
 ## Sensor pipeline (`DistanceSensor::update`, every tick)
 1. Trigger, `pulseIn` with a 12ms timeout (~2m). Readings outside 0.2-400cm are misses.
 2. **Missed-echo bridging:** up to `SENSOR_MAX_MISSES` (3) consecutive misses reuse the last good reading; after that the reading is `SENSOR_FAR_CM` (100cm), so the cursor slides out rather than jumping.
 3. **Median of the last 3** readings drops single spikes.
-4. **EMA**, `SENSOR_EMA_ALPHA` = 0.35 weight on the new value.
+4. **One-euro filter**: a low-pass whose cutoff is `SENSOR_MIN_CUTOFF_HZ` (1Hz) + `SENSOR_BETA` (0.2) x |speed in cm/s|, with the speed itself low-passed at `SENSOR_DCUTOFF_HZ` (2Hz). Heavy smoothing when still, little lag when moving.
+5. **Stream**: every tick's raw and smoothed distance go to a TCP client on `SENSOR_STREAM_PORT` (2323) for tuning.
 
 ## Adding a screen or menu
 1. Add an `AppState`, a `DisplayManager::drawX(activeRow)` and an `actionX(row)`; wire them into `updateInteractive()` and `handleSelection()`.

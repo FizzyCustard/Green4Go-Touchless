@@ -45,6 +45,9 @@ private:
   int _rawZone;                // Zone under the hand last tick (hysteresis)
   int _lastZoneIdx;            // Row being dwelled on
   unsigned long _zoneStartTime;
+  int _graceRow;               // Row just slipped off (dwell can resume)
+  unsigned long _graceStart;   // ...its dwell start time
+  unsigned long _graceLeftAt;  // ...and when the hand left it
   bool _armed;                 // Cleared by a selection until the hand moves
   int _rearmRow;               // Row the hand was on when disarmed
   float _disarmDist;           // Hand distance when disarmed

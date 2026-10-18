@@ -633,10 +633,14 @@ void DisplayManager::setHandCursor(float dist) {
     _cursorTarget = -1;
     return;
   }
-  // Same scale as the screen: 0-15cm over the three rows, 15-25cm over the
-  // base strip
-  if (dist <= MAX_INTERACTION_DISTANCE)
-    _cursorTarget = dist / MAX_INTERACTION_DISTANCE * CONTENT_H;
+  // Same scale as the screen: the rows' range over the three rows (closer
+  // pins to the top), the base range over the base strip
+  if (dist <= MIN_INTERACTION_DISTANCE)
+    _cursorTarget = 0;
+  else if (dist <= MAX_INTERACTION_DISTANCE)
+    _cursorTarget = (dist - MIN_INTERACTION_DISTANCE) /
+                    (MAX_INTERACTION_DISTANCE - MIN_INTERACTION_DISTANCE) *
+                    CONTENT_H;
   else
     _cursorTarget = BASE_Y + (dist - MAX_INTERACTION_DISTANCE) /
                                  (BASE_ACTIVE_MAX_DISTANCE -

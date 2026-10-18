@@ -9,11 +9,17 @@ public:
   void begin();
   void update();
   float getSmoothedDistance();
+  float getRawDistance(); // Last ping, -1 if it missed
 
 private:
   int _trigPin;
   int _echoPin;
   float _smoothedDist;
+  float _lastRaw;
+
+  // One-euro filter state
+  float _speed;              // Smoothed rate of change, cm/s
+  unsigned long _lastUpdateMs;
 
   // Last three raw readings for the median filter
   float _raw[3];
@@ -23,7 +29,6 @@ private:
   // Missed-echo bridging
   float _lastValid;
   uint8_t _missCount;
-
 
   float readDistance();
 };

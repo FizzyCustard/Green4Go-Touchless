@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <WiFi.h>
+#include <lwip/sockets.h>
 #include <time.h>
 
 DistanceSensor *sensor;
@@ -66,6 +67,36 @@ void setupOta() {
 }
 #endif
 
+#if SENSOR_STREAM_PORT
+// Streams every sensor tick to one TCP client for tuning, e.g.
+// `nc green4go.local 2323`. Lines are "millis raw smoothed" (raw -1 = miss).
+// Read-only, and costs nothing while nobody is connected.
+static WiFiServer streamServer(SENSOR_STREAM_PORT);
+static WiFiClient streamClient;
+static bool streamStarted = false;
+
+void streamSensor() {
+  if (!streamStarted)
+    return;
+  if (streamServer.hasClient()) {
+    if (streamClient)
+      streamClient.stop(); // Newest connection wins
+    streamClient = streamServer.accept();
+    streamClient.setNoDelay(true);
+    streamClient.println("# millis raw_cm smoothed_cm");
+  }
+  if (!streamClient || !streamClient.connected())
+    return;
+  // Never block the UI on a slow reader: a non-blocking send drops the line
+  // if the socket buffer is full (WiFiClient::write would wait, and its
+  // availableForWrite() always reports 0)
+  char line[40];
+  int n = snprintf(line, sizeof(line), "%lu %.1f %.1f\n", millis(),
+                   sensor->getRawDistance(), sensor->getSmoothedDistance());
+  send(streamClient.fd(), line, n, MSG_DONTWAIT);
+}
+#endif
+
 // Non-blocking WiFi upkeep. The ESP32 auto-reconnects on its own; this logs
 // state changes and nudges a reconnect every WIFI_CHECK_INTERVAL_MS as a
 // safety net. Never waits, so the UI keeps running while WiFi is down.
@@ -82,6 +113,13 @@ void maintainWiFi() {
 #ifdef OTA_PASSWORD
       if (!otaReady)
         setupOta();
+#endif
+#if SENSOR_STREAM_PORT
+      if (!streamStarted) {
+        streamServer.begin();
+        streamStarted = true;
+        Serial.printf("Sensor stream on port %d\n", SENSOR_STREAM_PORT);
+      }
 #endif
     } else {
       Serial.println("WiFi disconnected");
@@ -138,6 +176,9 @@ void loop() {
   if (millis() - lastTick >= MAIN_LOOP_INTERVAL_MS) {
     lastTick = millis();
     sensor->update();
+#if SENSOR_STREAM_PORT
+    streamSensor();
+#endif
     stateManager->update();
   }
 
