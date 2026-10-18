@@ -7,7 +7,7 @@ A touchless kitchen-counter display for an ESP32-S3. Wave your hand above an ult
 - **Touchless navigation.** Hand distance (4-22cm) picks one of three menu rows. Hold still for a second to select, with a progress bar showing it's about to happen. A cursor down the right edge shows where your hand maps.
 - **Live bus times.** The next two buses at your stop, counting down locally between fetches, colour-coded by how catchable they are.
 - **Leave-now alert.** During your commute hours, the screen shows **LEAVE NOW** while a bus is 8 to 6 minutes away, and the WLED strip gives a short green pulse.
-- **Bus status on the coffee light.** Whenever the lights are coffee white, the first six LEDs show the next bus you can catch: red while it's far off, fading through orange to green when it's time to go, then red once it's gone. The rest stays white, and it replaces the green pulse.
+- **Bus status on the coffee light.** Whenever the lights are coffee white, the first three LEDs show the next bus you can catch: red while it's far off, fading through orange to green when it's time to go, then red once it's gone. The rest stays white, and it replaces the green pulse.
 - **WLED control.** Light presets, and the strip shows bus status while you check times. Your own lighting is saved and restored around every effect.
 - **Coffee timer** that keeps the screen awake while it runs.
 - **Standby and sleep.** A passive standby screen with the next bus; the backlight fades out after 15 minutes idle and wakes when a hand comes near.
@@ -80,7 +80,7 @@ Behaviour is tuned in `src/Config.h`. The ones you're most likely to change:
 | `LEAVE_ALERT_START_HHMM` / `_END_HHMM` | 700 / 930 | Alert hours, local time |
 | `TIMEZONE` | UK (GMT/BST) | POSIX TZ string for local time |
 | `LEAVE_PULSE_MS` | 3000 | How long the green leave-now pulse plays |
-| `STATUS_LEDS` / `STATUS_BRIGHTNESS` | 6 / 100 | Status LEDs on the coffee light, and their brightness in % |
+| `STATUS_LEDS` / `STATUS_BRIGHTNESS` | 3 / 100 | Status LEDs on the coffee light, and their brightness in % |
 | `STATUS_RED_MIN` / `STATUS_ORANGE_MIN` | 15 / 10 | Status fades from red (15 min) to orange (10) to green (the leave window) |
 | `BUS_RED_MAX_MIN` / `BUS_GREEN_MAX_MIN` / `BUS_ORANGE_MAX_MIN` | 5 / 9 / 12 | Bus status colour thresholds |
 | `DISPLAY_SLEEP_MS` | 15 min | Idle time before the backlight fades out |

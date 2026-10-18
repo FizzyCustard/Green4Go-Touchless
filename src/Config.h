@@ -136,7 +136,7 @@
 // fading to orange as it gets close, green inside the leave window, then red
 // again once it's gone. The rest of the strip stays white. While coffee white
 // is on, this replaces the green leave-now pulse.
-#define STATUS_LEDS 6            // LEDs at the start of the strip (LED 0 up)
+#define STATUS_LEDS 3            // LEDs at the start of the strip (LED 0 up)
 #define STATUS_BRIGHTNESS 100    // % of full colour, independent of the white
 #define STATUS_RED_MIN 15        // Fully red at or beyond this many minutes...
 #define STATUS_ORANGE_MIN 10     // ...orange here, green from LEAVE_WINDOW_MAX_MIN

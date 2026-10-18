@@ -76,7 +76,7 @@ During `LEAVE_ALERT_DAYS` between `LEAVE_ALERT_START_HHMM` and `LEAVE_ALERT_END_
 
 ## Bus status on the coffee light
 
-Whenever the lights are coffee white (any day, any time), the first `STATUS_LEDS` (6) LEDs show the next bus you can still catch: red at `STATUS_RED_MIN` (15) minutes or more, fading to orange at `STATUS_ORANGE_MIN` (10), then to green at `LEAVE_WINDOW_MAX_MIN` (8). It holds green through the leave window, and turns red once the bus is under `LEAVE_WINDOW_MIN_MIN` (6) and there's no later bus to show. The rest of the strip stays white.
+Whenever the lights are coffee white (any day, any time), the first `STATUS_LEDS` (3) LEDs show the next bus you can still catch: red at `STATUS_RED_MIN` (15) minutes or more, fading to orange at `STATUS_ORANGE_MIN` (10), then to green at `LEAVE_WINDOW_MAX_MIN` (8). It holds green through the leave window, and turns red once the bus is under `LEAVE_WINDOW_MIN_MIN` (6) and there's no later bus to show. The rest of the strip stays white.
 
 Every `STATUS_TICK_MS` (10s) the device reads the strip's state and only touches it if segment 0 is on, solid and exactly the coffee colour, so picking another look in the WLED app turns the status off. Drawing the LEDs freezes the segment; the device only sends an update when the colour changes, or when something has repainted the strip. While an effect has the lights it waits, and catches up as soon as they're handed back.
 
