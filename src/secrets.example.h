@@ -16,7 +16,7 @@
 #define TFL_FILTER_LINES ""
 // Optional: a free TfL API key (https://api-portal.tfl.gov.uk) gives a much
 // higher rate limit than anonymous use. Not needed for one device.
-// #define TFL_APP_KEY "your-app-key"
+// #define TFL_APP_KEY "your-tfl-app-key"
 
 // --- WLED Integration ---
 // IP address of your WLED instance

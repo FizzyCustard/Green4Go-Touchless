@@ -5,6 +5,7 @@
 ### Features
 - Bus status on the coffee light: while the lights are coffee white, the first three LEDs fade from red to orange to green as the next catchable bus approaches the leave window, then go red. Replaces the green pulse while coffee white is on.
 - The green leave-now pulse now plays for 3 seconds instead of the whole window. LEAVE NOW still shows on screen throughout.
+- OTA over HTTP: `pio run -e esp32s3_http -t upload` (or one curl) sends the firmware straight to the device, so no firewall port needs opening on your computer. espota still works.
 - Sensor stream: `nc green4go.local 2323` shows every raw and smoothed reading, for tuning.
 
 ### Interaction

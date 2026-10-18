@@ -85,4 +85,4 @@ Every `STATUS_TICK_MS` (10s) the device reads the strip's state and only touches
 - WiFi reconnects in the background; nothing blocks the UI while it's down.
 - Once a minute the device logs free heap, the largest free block and stack headroom.
 - It restarts itself (only when idle in standby) if the network task is stuck for 2 minutes, the heap is too fragmented for TLS for 5 minutes, or there's been no good TfL data for 2 hours while WiFi is up. The serial log shows the reset reason at boot.
-- OTA is opt-in, needs a 12+ character password, and a failed upload never changes the running firmware.
+- OTA is opt-in, needs a 12+ character password, and a failed or cut-off upload never changes the running firmware. The HTTP upload (`POST /update`) uses digest auth, so the password never crosses the network in the clear, and checks it before writing anything to flash.
