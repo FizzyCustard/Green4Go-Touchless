@@ -97,8 +97,17 @@ Once the device has been flashed over USB, you can update it over WiFi.
 3. From then on, on the same network:
    ```bash
    export GREEN4GO_OTA_PASSWORD=your-password
-   pio run -e esp32s3_ota -t upload
+   pio run -e esp32s3_http -t upload
    ```
+
+`esp32s3_http` sends the firmware straight to the device over HTTP (user `admin`, digest auth), so it works through a firewall on your computer. Without PlatformIO it's one curl:
+
+```bash
+curl --digest -u admin:your-password --data-binary @firmware.bin \
+  -H "Content-Type: application/octet-stream" http://green4go.local/update
+```
+
+The older `esp32s3_ota` environment (espota) still works, but the device has to connect back to your computer during the upload, so a firewall like ufw has to let it in.
 
 The device advertises itself as `green4go.local`. If your network blocks mDNS, set `upload_port` in `platformio.ini` to its IP address (printed in the serial log at boot).
 

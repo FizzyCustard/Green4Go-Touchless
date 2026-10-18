@@ -41,9 +41,11 @@ OTA is **opt-in**: it is compiled in only when `OTA_PASSWORD` is defined in `sec
 2. Then:
    ```bash
    export GREEN4GO_OTA_PASSWORD=your-password
-   pio run -e esp32s3_ota -t upload
+   pio run -e esp32s3_http -t upload
    ```
-`esp32s3_ota` extends `esp32s3` with `upload_protocol = espota`, `upload_port = green4go.local`, and passes the password from the env var. If you change `OTA_HOSTNAME`, change `upload_port` to match.
+`esp32s3_http` (preferred) POSTs the raw `.bin` to `http://green4go.local/update` with curl, digest auth as user `OTA_WEB_USER` (`admin`). Every connection goes from the computer to the device, so a firewall on the computer doesn't matter. The handler in `main.cpp` (`setupWebOta()`) checks the password at `RAW_START` before writing flash, refuses multipart forms with 415 (the library routes forms and raw bodies to the same callback with different structs; reading the wrong one crashes), and shows "Update failed" if the upload is cut off.
+
+`esp32s3_ota` (espota) still works, but the device connects back to the computer during the upload, so a host firewall (e.g. ufw) must allow it in. Both pass the password from the env var. If you change `OTA_HOSTNAME`, change `upload_port` in both to match.
 
 ## Serial output worth knowing
 - Tagged logs: `[Bus]`, `[WLED]`, `[Net]`, `[Alert]`, `[Health]`.

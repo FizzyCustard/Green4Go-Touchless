@@ -154,6 +154,8 @@
 #ifndef OTA_HOSTNAME
 #define OTA_HOSTNAME "green4go" // Reachable as green4go.local
 #endif
+#define OTA_WEB_PORT 80     // HTTP upload: POST /update
+#define OTA_WEB_USER "admin" // ...with this user and OTA_PASSWORD
 
 // --- Network task ---
 #define NET_QUEUE_LENGTH 10

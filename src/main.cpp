@@ -4,6 +4,8 @@
 #include "StateManager.h"
 #include <Arduino.h>
 #include <ArduinoOTA.h>
+#include <Update.h>
+#include <WebServer.h>
 #include <WiFi.h>
 #include <lwip/sockets.h>
 #include <time.h>
@@ -31,6 +33,93 @@ static_assert(sizeof(OTA_PASSWORD) > 12,
 
 static bool otaReady = false;
 static bool otaInProgress = false;
+
+// The same update pushed over HTTP, so every connection starts from the
+// sender (espota needs the device to connect back, which firewalls block):
+//   curl --digest -u admin:PASSWORD --data-binary @firmware.bin
+//        -H "Content-Type: application/octet-stream"
+//        http://green4go.local/update
+// Digest auth, so the password never crosses the network in the clear.
+// The body is the raw .bin: the library hands a raw body and a multipart
+// form to the same callback through different structs (reading the wrong
+// one crashes), so forms are refused outright.
+static WebServer otaWeb(OTA_WEB_PORT);
+static bool webUploadAuthed = false;
+
+static bool isFormUpload() {
+  return otaWeb.header("Content-Type").startsWith("multipart/");
+}
+
+void setupWebOta() {
+  const char *headers[] = {"Content-Type"};
+  otaWeb.collectHeaders(headers, 1);
+  otaWeb.on(
+      "/update", HTTP_POST,
+      // Runs once the whole request has been received
+      []() {
+        if (isFormUpload()) {
+          otaWeb.send(415, "text/plain",
+                      "Send the raw .bin with --data-binary\n");
+          return;
+        }
+        if (!webUploadAuthed) {
+          otaWeb.requestAuthentication(DIGEST_AUTH, OTA_HOSTNAME);
+          return;
+        }
+        webUploadAuthed = false;
+        if (Update.hasError() || !Update.isFinished()) {
+          otaWeb.send(500, "text/plain",
+                      String("Update failed: ") + Update.errorString() + "\n");
+          if (otaInProgress) {
+            otaInProgress = false;
+            displayManager->drawOtaMessage("Update failed", C_LIGHT_RED);
+            delay(2000);
+          }
+          return;
+        }
+        otaWeb.send(200, "text/plain", "OK, restarting\n");
+        Serial.println("OTA (HTTP): done, rebooting");
+        otaInProgress = false;
+        displayManager->drawOtaProgress(100);
+        displayManager->drawOtaMessage("Restarting...", C_GREEN);
+        delay(500); // Let the response reach the sender
+        ESP.restart();
+      },
+      // Runs for each chunk of the body
+      []() {
+        if (isFormUpload())
+          return; // Only otaWeb.upload() is valid here, and we don't use it
+        HTTPRaw &raw = otaWeb.raw();
+        if (raw.status == RAW_START) {
+          // Headers are in by now: refuse to touch flash without the password
+          webUploadAuthed = otaWeb.authenticate(OTA_WEB_USER, OTA_PASSWORD);
+          // curl's first digest request is empty, just to get a challenge
+          if (!webUploadAuthed || otaWeb.clientContentLength() <= 0)
+            return;
+          Serial.println("OTA (HTTP): starting");
+          otaInProgress = true;
+          displayManager->drawOtaProgress(0);
+          Update.begin(otaWeb.clientContentLength());
+        } else if (!webUploadAuthed || !otaInProgress || Update.hasError()) {
+          return;
+        } else if (raw.status == RAW_WRITE) {
+          Update.write(raw.buf, raw.currentSize);
+          displayManager->drawOtaProgress((unsigned int)(
+              (uint64_t)raw.totalSize * 100 / otaWeb.clientContentLength()));
+        } else if (raw.status == RAW_END) {
+          Update.end(); // Checks the image before it can boot
+        } else if (raw.status == RAW_ABORTED) {
+          // The sender went away; no reply handler runs after this
+          Update.abort();
+          webUploadAuthed = false;
+          otaInProgress = false;
+          Serial.println("OTA (HTTP): upload cut off");
+          displayManager->drawOtaMessage("Update failed", C_LIGHT_RED);
+          delay(2000);
+        }
+      });
+  otaWeb.begin();
+}
 
 void setupOta() {
   ArduinoOTA.setHostname(OTA_HOSTNAME);
@@ -62,6 +151,7 @@ void setupOta() {
     delay(2000); // Leave the message up before the UI takes over again
   });
   ArduinoOTA.begin();
+  setupWebOta();
   otaReady = true;
   Serial.printf("OTA ready at %s.local\n", OTA_HOSTNAME);
 }
@@ -166,8 +256,10 @@ void setup() {
 void loop() {
   maintainWiFi();
 #ifdef OTA_PASSWORD
-  if (otaReady)
+  if (otaReady) {
     ArduinoOTA.handle();
+    otaWeb.handleClient();
+  }
 #endif
 
   // Sensor + state machine at a steady 20Hz (the HC-SR04 needs ~50ms
