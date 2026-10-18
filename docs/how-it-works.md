@@ -13,22 +13,24 @@ The 240x320 screen is three 80px rows plus an 80px base strip:
 
 ```
  y=0    ┌───────────────┬─┐
-        │  Row 0        │ │   0-5cm
+        │  Row 0        │ │   4-10cm (closer counts too)
  y=80   ├───────────────┤ │
-        │  Row 1        │ │   5-10cm      ← cursor gutter
+        │  Row 1        │ │   10-16cm     ← cursor gutter
  y=160  ├───────────────┤ │
-        │  Row 2        │ │   10-15cm
+        │  Row 2        │ │   16-22cm
  y=240  ├───────────────┤ │
-        │  Base strip   │ │   15-25cm: "Closer to select"
+        │  Base strip   │ │   22-32cm: "Closer to select"
  y=320  └───────────────┴─┘
 ```
 
-Each screen maps hand distance straight onto the rows, so what's under your hand on screen is what you're pointing at. The 8px gutter on the right carries a cursor that glides to your hand's position.
+Each screen maps hand distance straight onto the rows, so what's under your hand on screen is what you're pointing at. The rows start at 4cm because the HC-SR04 is unreliable closer than that. The 8px gutter on the right carries a cursor that glides to your hand's position.
 
 ## Selecting
 
 - **Dwell:** hold on a row for `DWELL_THRESHOLD_MS` (1s) to select it. A bar fills along the bottom of the row while you hold.
-- **Hysteresis:** once you're on a row, you stay on it until you move `ZONE_HYSTERESIS_CM` (0.5cm) past its edge, so jitter on a boundary doesn't flicker.
+- **Hysteresis:** once you're on a row, you stay on it until you move `ZONE_HYSTERESIS_CM` (1.25cm) past its edge, so jitter on a boundary doesn't flicker.
+- **Dwell grace:** slip off a row and back within `DWELL_GRACE_MS` (250ms) and its bar carries on from where it was instead of starting again.
+- **Smoothing:** the distance goes through a one-euro filter, which smooths heavily while your hand is still (steady cursor during a dwell) and barely at all while it moves (the cursor keeps up).
 - **Re-arm:** after any selection or screen change, nothing can be selected until your hand leaves, or moves more than `REARM_DISTANCE_CM` (2cm) onto a different row. Without this, a still hand would select Bus Times and then immediately trigger whatever sits at the same height on the next screen.
 - **Hands vs objects:** something that hasn't moved more than 1cm in 60s (a mug, the kettle) stops counting as a hand, so it can't keep the screen awake or wake it from standby.
 
@@ -38,11 +40,15 @@ Each screen maps hand distance straight onto the rows, so what's under your hand
 |---|---|---|
 | Standby | none | Title, next bus, the one after, status. Breathing "Hold close to wake" hint. Hold under 3cm for 1s to unlock. |
 | Main menu | Timer / Bus Times / Lights | |
-| Timer | info / Reset / Back | Timer starts on entry. The menu opens when your hand returns to the base zone after leaving (over 30cm), and closes when it leaves again. A running timer keeps the screen awake for up to an hour. |
+| Timer | info / Reset / Back | Timer starts on entry. The menu opens when your hand returns to the base zone after leaving (over 37cm), and closes when it leaves again. A running timer keeps the screen awake for up to an hour. |
 | Bus Times | info / Refresh / Back | Status colour in the info row. Refreshes every 30s while open. |
 | Lights | Rainbow / Coffee / Back | Shows a confirmation, then returns to the main menu. |
 
-After 30s without interaction, interactive screens return to standby. After 15 minutes idle in standby, the backlight fades out; a hand within 25cm fades it back in.
+After 30s without interaction, interactive screens return to standby. After 15 minutes idle in standby, the backlight fades out; a hand within 32cm fades it back in.
+
+## Tuning the sensor
+
+Connect to the sensor stream (`nc green4go.local 2323`) to see every reading as `millis raw smoothed`, in cm (raw -1 is a missed echo). Set `SENSOR_STREAM_PORT` to 0 to turn it off.
 
 ## Bus data
 

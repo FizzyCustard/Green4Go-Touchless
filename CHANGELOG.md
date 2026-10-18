@@ -5,6 +5,12 @@
 ### Features
 - Bus status on the coffee light: while the lights are coffee white, the first six LEDs fade from red to orange to green as the next catchable bus approaches the leave window, then go red. Replaces the green pulse while coffee white is on.
 - The green leave-now pulse now plays for 3 seconds instead of the whole window. LEAVE NOW still shows on screen throughout.
+- Sensor stream: `nc green4go.local 2323` shows every raw and smoothed reading, for tuning.
+
+### Interaction
+- The menu rows now cover 4-22cm (three 6cm rows) instead of 0-15cm, so the top row is no longer squeezed into the sensor's unreliable first few cm. Base strip is 22-32cm; the timer menu closes beyond 37cm.
+- One-euro filter replaces the fixed smoothing: the cursor follows a moving hand about three times faster and holds steadier when still.
+- Rows are stickier (1.25cm hysteresis), and slipping off a row and back within 250ms resumes its dwell instead of restarting it.
 
 ## 1.0.0
 

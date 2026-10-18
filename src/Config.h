@@ -82,16 +82,25 @@
 #define BUS_BOOT_RETRY_MS 5000        // Splash retry interval for the first fetch
 
 // --- Distance/Zone Constants ---
-#define MAX_INTERACTION_DISTANCE 15.0   // Maximum distance for interaction
-#define BASE_ACTIVE_MIN_DISTANCE 15.0   // Min distance for base zone active
-#define BASE_ACTIVE_MAX_DISTANCE 25.0   // Max distance for base zone active
+// The rows start a few cm out: the HC-SR04 is unreliable below ~4cm, so
+// the top row used to lose most of its band. A hand closer than the start
+// still counts as the top row.
+#define MIN_INTERACTION_DISTANCE 4.0    // Top row starts here...
+#define MAX_INTERACTION_DISTANCE 22.0   // ...bottom row ends here (3 x 6cm)
+#define BASE_ACTIVE_MIN_DISTANCE 22.0   // Min distance for base zone active
+#define BASE_ACTIVE_MAX_DISTANCE 32.0   // Max distance for base zone active
 #define UNLOCK_HYSTERESIS_CM 2.0        // Hysteresis for unlock cancel
-#define ZONE_HYSTERESIS_CM 0.5          // Sticky band around menu zone edges
+#define ZONE_HYSTERESIS_CM 1.25         // Sticky band around menu zone edges
+#define DWELL_GRACE_MS 250              // Slip off a row and back this fast: dwell resumes
 #define REARM_DISTANCE_CM 2.0           // Movement needed to re-arm after a selection
-#define TIMER_MENU_CLOSE_DISTANCE 30.0  // Hand beyond this closes the timer menu
+#define TIMER_MENU_CLOSE_DISTANCE 37.0  // Hand beyond this closes the timer menu
 #define SENSOR_FAR_CM 100.0             // Value used when no echo comes back
 #define SENSOR_ECHO_TIMEOUT_US 12000    // ~2m max range
-#define SENSOR_EMA_ALPHA 0.35           // Smoothing weight of each new reading
+// One-euro filter: smooths hard while the hand is still (steady cursor
+// during a dwell) and lightly while it moves (cursor keeps up)
+#define SENSOR_MIN_CUTOFF_HZ 1.0        // Smoothing when still (lower = steadier)
+#define SENSOR_BETA 0.2                 // How fast smoothing eases off with speed (per cm/s)
+#define SENSOR_DCUTOFF_HZ 2.0           // Smoothing of the speed estimate
 #define SPEED_OF_SOUND_CM_PER_US 0.034
 #define MOVE_THRESHOLD_CM 1.0           // Change that counts as the hand moving
 #define STATIC_OBJECT_MS 60000UL        // Still this long = an object, not a hand
@@ -161,5 +170,8 @@
 
 // --- Debug ---
 #define DEBUG_SENSOR 0 // 1 = print raw/smoothed distance every tick
+// Raw/smoothed distance every tick to whoever connects to this TCP port,
+// e.g. `nc green4go.local 2323`. 0 = off.
+#define SENSOR_STREAM_PORT 2323
 
 #endif

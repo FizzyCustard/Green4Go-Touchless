@@ -6,10 +6,10 @@ ST7789, 240 wide x 320 tall, rotation 0, IPS. `(0,0)` is top-left. Created as `A
 ## Layout
 | y | Region | Hand distance |
 |---|---|---|
-| 0-80 | Row 0 | 0-5cm |
-| 80-160 | Row 1 | 5-10cm |
-| 160-240 | Row 2 | 10-15cm |
-| 240-320 | Base strip | 15-25cm |
+| 0-80 | Row 0 | 4-10cm (closer pins here) |
+| 80-160 | Row 1 | 10-16cm |
+| 160-240 | Row 2 | 16-22cm |
+| 240-320 | Base strip | 22-32cm |
 
 On interactive screens x 232-240 is the cursor gutter; content spans x 0 to `_paintW` (232).
 

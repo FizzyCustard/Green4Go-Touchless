@@ -13,6 +13,9 @@ DistanceSensor::DistanceSensor(int trigPin, int echoPin) {
     _echoPin = echoPin;
   }
   _smoothedDist = -1.0;
+  _lastRaw = -1.0;
+  _speed = 0;
+  _lastUpdateMs = 0;
   _rawCount = 0;
   _rawIdx = 0;
   _lastValid = -1.0;
@@ -40,8 +43,15 @@ static float median3(float a, float b, float c) {
   return (a > b) ? a : b;
 }
 
+// Weight of a new sample for a low-pass filter at cutoffHz
+static float lowPassAlpha(float cutoffHz, float dt) {
+  float tau = 1.0f / (2.0f * PI * cutoffHz);
+  return 1.0f / (1.0f + tau / dt);
+}
+
 void DistanceSensor::update() {
   float raw = readDistance();
+  _lastRaw = raw;
 
   // HC-SR04s drop the odd echo even with a hand held still. Bridge short
   // runs of misses with the last good reading; only a sustained miss means
@@ -68,13 +78,22 @@ void DistanceSensor::update() {
   float filtered =
       (_rawCount < 3) ? dist : median3(_raw[0], _raw[1], _raw[2]);
 
-  // EMA Smoothing
+  // One-euro filter: the cutoff rises with the hand's speed, so a still
+  // hand gets heavy smoothing and a moving one barely any lag
+  unsigned long now = millis();
   if (_smoothedDist < 0) {
     _smoothedDist = filtered;
+    _speed = 0;
   } else {
-    _smoothedDist =
-        (SENSOR_EMA_ALPHA * filtered) + ((1.0 - SENSOR_EMA_ALPHA) * _smoothedDist);
+    float dt = (now - _lastUpdateMs) / 1000.0f;
+    if (dt <= 0)
+      dt = MAIN_LOOP_INTERVAL_MS / 1000.0f;
+    float rawSpeed = (filtered - _smoothedDist) / dt;
+    _speed += lowPassAlpha(SENSOR_DCUTOFF_HZ, dt) * (rawSpeed - _speed);
+    float cutoff = SENSOR_MIN_CUTOFF_HZ + SENSOR_BETA * fabsf(_speed);
+    _smoothedDist += lowPassAlpha(cutoff, dt) * (filtered - _smoothedDist);
   }
+  _lastUpdateMs = now;
 
 #if DEBUG_SENSOR
   Serial.printf("Sensor - Raw: %.2f, Smoothed: %.2f\n", raw, _smoothedDist);
@@ -111,3 +130,5 @@ float DistanceSensor::readDistance() {
 }
 
 float DistanceSensor::getSmoothedDistance() { return _smoothedDist; }
+
+float DistanceSensor::getRawDistance() { return _lastRaw; }

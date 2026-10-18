@@ -27,8 +27,8 @@
 #define G_BASE_DARK 0x2104  // Dark grey for base
 #define G_BASE_LIGHT 0x630C // Light grey for base (active)
 
-// Layout: a 240x240 content area made of three 80px rows (one per 5cm
-// distance zone), plus an 80px "base" strip underneath for 15-25cm.
+// Layout: a 240x240 content area made of three 80px rows (one per 6cm
+// distance zone, 4-22cm), plus an 80px "base" strip underneath for 22-32cm.
 #define SCREEN_W 240
 #define CONTENT_H 240
 #define ROW_H 80
@@ -75,7 +75,7 @@ public:
   // Dwell feedback: a bar that fills along the bottom of the hovered row
   void drawDwellProgress(int row, float progress);
 
-  // Base zone (15-25cm feedback strip)
+  // Base zone (22-32cm feedback strip)
   void updateBaseZone(bool active);
 
   // Hand-position marker in the right-hand gutter (menu screens only).

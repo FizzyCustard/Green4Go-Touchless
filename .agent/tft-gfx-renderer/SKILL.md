@@ -17,7 +17,7 @@ There is no frame buffer: every pixel goes straight over SPI, so anything painte
 `drawTextInBand(text, size, bandY, bandH, fg, bg, clipBottom = CONTENT_H)` centres text in a horizontal band. It fills the four rectangles **around** the text box with `bg`, then prints the text **opaquely** (`setTextColor(fg, bg)`), so every pixel is written once and nothing flashes through black. Use it for any text that changes. It clips at `clipBottom` (used while the timer menu slides) and pre-fills partial glyph rows at the clip edge. Text width is `6 * size * len` (built-in 6x8 font); `fitTextSize(len, maxSize, TEXT_MAX_W)` picks the largest size that fits 228px.
 
 ## Cursor gutter and `_paintW`
-Interactive screens (main, lights, timer, bus, success/error) reserve an 8px gutter (`GUTTER_W`) on the right for the hand cursor, a white marker on a grey rail. `_paintW` is `SCREEN_W - GUTTER_W` (232) on those screens and 240 elsewhere; **content must paint to `_paintW`, never 240**, or it will overwrite the rail. `setHandCursor(dist)` maps 0-15cm to y 0-240 and 15-25cm to the base strip (240-320); `update()` eases the marker towards it and `drawCursorAt()` repaints only the uncovered rail.
+Interactive screens (main, lights, timer, bus, success/error) reserve an 8px gutter (`GUTTER_W`) on the right for the hand cursor, a white marker on a grey rail. `_paintW` is `SCREEN_W - GUTTER_W` (232) on those screens and 240 elsewhere; **content must paint to `_paintW`, never 240**, or it will overwrite the rail. `setHandCursor(dist)` maps 4-22cm to y 0-240 (closer pins to 0) and 22-32cm to the base strip (240-320); `update()` eases the marker towards it and `drawCursorAt()` repaints only the uncovered rail.
 
 ## Animation: frame-capped `update()`
 `DisplayManager::update()` is called every `loop()` pass and runs at most every `FRAME_INTERVAL_MS` (16ms, ~60fps), separately from the 50ms state tick. It handles:
@@ -27,7 +27,7 @@ Never animate with a blocking loop or `delay()`.
 
 ## Other building blocks
 - `drawDwellProgress(row, progress)`: 6px bar along the bottom of the hovered row in the row's contrast colour; grows/shrinks incrementally, skipped while animating.
-- `updateBaseZone(active)`: base strip (y 240-320), dark grey idle, light grey "Closer to select" when 15-25cm.
+- `updateBaseZone(active)`: base strip (y 240-320), dark grey idle, light grey "Closer to select" when 22-32cm.
 - `drawUnlockVisual(progress)`: green ring filled clockwise from 12 o'clock with `fillArc`, drawing only the new slice.
 - `contrastColor(bg)`: black text on bright backgrounds, white on dark.
 

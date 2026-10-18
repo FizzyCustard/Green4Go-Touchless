@@ -36,8 +36,12 @@ StateManager::StateManager(DistanceSensor *sensor, DisplayManager *display) {
   _rawZone = ROW_NONE;
   _lastZoneIdx = ROW_NONE;
   _zoneStartTime = 0;
+  _graceRow = ROW_NONE;
+  _graceStart = 0;
+  _graceLeftAt = 0;
   _armed = false;
   _rearmRow = ROW_UNSET;
+  _graceRow = ROW_NONE; // A dwell from before can't be resumed
   _disarmDist = 0;
 
   _lastInteractionTime = millis();
@@ -102,6 +106,7 @@ void StateManager::goToState(AppState s) {
 void StateManager::disarm() {
   _armed = false;
   _rearmRow = ROW_UNSET;
+  _graceRow = ROW_NONE; // A dwell from before can't be resumed
   _disarmDist = _sensor ? _sensor->getSmoothedDistance() : 0;
 }
 
@@ -203,26 +208,29 @@ void StateManager::update() {
 
 // --- Zones & selection ---
 
-// Splits the usable range into numZones bands. Once the hand is in a zone it
+// Splits MIN-MAX_INTERACTION_DISTANCE into numZones bands (closer than MIN
+// counts as the first). Once the hand is in a zone it
 // stays there until it moves ZONE_HYSTERESIS_CM past the edge, so jitter on
 // a boundary doesn't flicker the highlight or restart the dwell.
 int StateManager::calculateZone(float dist, int numZones, int prevZone) {
   if (numZones <= 0 || dist < 0)
     return ROW_NONE;
 
-  float zoneSize = MAX_INTERACTION_DISTANCE / numZones;
+  float zoneSize =
+      (MAX_INTERACTION_DISTANCE - MIN_INTERACTION_DISTANCE) / numZones;
+  float pos = dist - MIN_INTERACTION_DISTANCE;
 
   if (prevZone >= 0 && prevZone < numZones) {
     float lo = prevZone * zoneSize - ZONE_HYSTERESIS_CM;
     float hi = (prevZone + 1) * zoneSize + ZONE_HYSTERESIS_CM;
-    if (dist >= lo && dist <= hi)
+    if ((prevZone == 0 || pos >= lo) && pos <= hi)
       return prevZone;
   }
 
   if (dist > MAX_INTERACTION_DISTANCE)
     return ROW_NONE;
 
-  int zone = (int)(dist / zoneSize);
+  int zone = (int)(pos / zoneSize);
   if (zone >= numZones)
     zone = numZones - 1;
   if (zone < 0)
@@ -255,7 +263,7 @@ bool StateManager::updateTimerMenu(float dist) {
 void StateManager::updateInteractive(float dist) {
   unsigned long now = millis();
 
-  // Each screen is three 5cm zones that line up with the three 80px rows.
+  // Each screen is three 6cm zones that line up with the three 80px rows.
   // firstRow skips a non-selectable top row (timer / bus info).
   int numZones = 3;
   int firstRow = 0;
@@ -298,13 +306,22 @@ void StateManager::updateInteractive(float dist) {
       // time spent on the row while disarmed
       _armed = true;
       _zoneStartTime = now;
+      _lastZoneIdx = row;
+      _graceRow = ROW_NONE;
     }
   }
 
-  // Dwell tracking
+  // Dwell tracking. Slipping off a row and straight back (a wobble or a
+  // stray reading on the edge) pauses its dwell rather than restarting it
   if (row != _lastZoneIdx) {
+    unsigned long start = now;
+    if (row >= 0 && row == _graceRow && now - _graceLeftAt <= DWELL_GRACE_MS)
+      start = _graceStart + (now - _graceLeftAt);
+    _graceRow = _lastZoneIdx;
+    _graceStart = _zoneStartTime;
+    _graceLeftAt = now;
     _lastZoneIdx = row;
-    _zoneStartTime = now;
+    _zoneStartTime = start;
   }
   float progress = 0;
   if (_armed && row >= 0)

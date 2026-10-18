@@ -4,7 +4,7 @@ A touchless kitchen-counter display for an ESP32-S3. Wave your hand above an ult
 
 ## Features
 
-- **Touchless navigation.** Hand distance (0-15cm) picks one of three menu rows. Hold still for a second to select, with a progress bar showing it's about to happen. A cursor down the right edge shows where your hand maps.
+- **Touchless navigation.** Hand distance (4-22cm) picks one of three menu rows. Hold still for a second to select, with a progress bar showing it's about to happen. A cursor down the right edge shows where your hand maps.
 - **Live bus times.** The next two buses at your stop, counting down locally between fetches, colour-coded by how catchable they are.
 - **Leave-now alert.** During your commute hours, the screen shows **LEAVE NOW** while a bus is 8 to 6 minutes away, and the WLED strip gives a short green pulse.
 - **Bus status on the coffee light.** Whenever the lights are coffee white, the first six LEDs show the next bus you can catch: red while it's far off, fading through orange to green when it's time to go, then red once it's gone. The rest stays white, and it replaces the green pulse.
@@ -36,7 +36,7 @@ The display is wired on the board. The sensor connects to the header:
 
 > **Important:** a 5V HC-SR04 outputs 5V on ECHO, and the ESP32-S3's GPIOs are 3.3V only. Put a divider between them: ECHO → 1kΩ → GPIO18, and GPIO18 → 2kΩ → GND. Skipping it may work for a while, then damage the pin. A 3.3V sensor (HC-SR04P, RCWL-1601) powered from 3V3 doesn't need one.
 
-Mount the sensor facing the space where your hand will be. Screen position maps to distance: the top row is closest to the sensor, the grey base strip at the bottom is furthest (15-25cm). More detail in [docs/hardware.md](docs/hardware.md).
+Mount the sensor facing the space where your hand will be. Screen position maps to distance: the top row is closest to the sensor, the grey base strip at the bottom is furthest (22-32cm). More detail in [docs/hardware.md](docs/hardware.md).
 
 ## Setup
 
@@ -64,8 +64,8 @@ This is a [PlatformIO](https://platformio.org/) project (it won't build in the A
 ## Using it
 
 - **Wake:** hold your hand close to the sensor (under 3cm) for a second. A green ring fills to unlock.
-- **Navigate:** move your hand between 0 and 15cm to highlight a row. Hold still and the bar along the row fills; when it's full, that row is selected. To select again, move your hand away or to another row.
-- **Timer screen:** move your hand away (over 30cm) then bring it back to the grey base zone (15-25cm) to open the Reset/Back menu.
+- **Navigate:** move your hand between about 4 and 22cm to highlight a row. Hold still and the bar along the row fills; when it's full, that row is selected. To select again, move your hand away or to another row.
+- **Timer screen:** move your hand away (over 37cm) then bring it back to the grey base zone (22-32cm) to open the Reset/Back menu.
 - **Bus Times:** the top row shows the next bus. Middle row refreshes, bottom row goes back. The lights show the bus status for 10 seconds.
 - After 30 seconds without interaction it returns to standby.
 
