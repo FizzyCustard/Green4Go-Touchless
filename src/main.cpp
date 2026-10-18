@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <WiFi.h>
+#include <lwip/sockets.h>
 #include <time.h>
 
 DistanceSensor *sensor;
@@ -86,12 +87,13 @@ void streamSensor() {
   }
   if (!streamClient || !streamClient.connected())
     return;
-  // Never block the UI on a slow reader: drop the line if the buffer's full
+  // Never block the UI on a slow reader: a non-blocking send drops the line
+  // if the socket buffer is full (WiFiClient::write would wait, and its
+  // availableForWrite() always reports 0)
   char line[40];
   int n = snprintf(line, sizeof(line), "%lu %.1f %.1f\n", millis(),
                    sensor->getRawDistance(), sensor->getSmoothedDistance());
-  if (streamClient.availableForWrite() >= n)
-    streamClient.write((const uint8_t *)line, n);
+  send(streamClient.fd(), line, n, MSG_DONTWAIT);
 }
 #endif
 
