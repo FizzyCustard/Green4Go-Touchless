@@ -69,18 +69,13 @@ StateManager::StateManager(DistanceSensor *sensor, DisplayManager *display) {
   _busFailCount = 0;
   _busEverRequested = false;
   _lastBusRequest = 0;
-
-  _timerStartTime = 0;
-  _timerRunning = false;
-  _timerMenuVisible = false;
-  _timerMenuArmed = false;
 }
 
 // --- State plumbing ---
 
 bool StateManager::isInteractive(AppState s) {
-  return s == MAIN_MENU || s == TIMER_SCREEN || s == BUS_TIMES ||
-         s == LIGHT_SETTINGS || s == SHOWING_SUCCESS || s == SHOWING_API_ERROR;
+  return s == MAIN_MENU || s == BUS_TIMES || s == LIGHT_SETTINGS ||
+         s == SHOWING_SUCCESS || s == SHOWING_API_ERROR;
 }
 
 // Every screen change goes through here so cleanup can't be forgotten
@@ -99,8 +94,6 @@ void StateManager::goToState(AppState s) {
 
   if (old == BUS_TIMES && s != BUS_TIMES)
     endBusEffect(); // Always give the lights back
-  if (old == TIMER_SCREEN && s != TIMER_SCREEN)
-    _timerRunning = false;
 }
 
 void StateManager::disarm() {
@@ -116,17 +109,15 @@ void StateManager::checkStandbyTimeout() {
   if (!isInteractive(_currentState))
     return;
 
-  // A running timer keeps the screen awake (it's the thing being watched)
-  unsigned long limit = STANDBY_TIMEOUT_MS;
-  if (_currentState == TIMER_SCREEN && _timerRunning)
-    limit = TIMER_AWAKE_MAX_MS;
+  if (millis() - _lastInteractionTime > STANDBY_TIMEOUT_MS)
+    goToStandby();
+}
 
-  if (millis() - _lastInteractionTime > limit) {
-    goToState(STANDBY);
-    // Refresh straight away if what we have is getting old
-    if (millis() - _busAt > BUS_FRESH_MS)
-      requestBus();
-  }
+void StateManager::goToStandby() {
+  goToState(STANDBY);
+  // Refresh straight away if what we have is getting old
+  if (millis() - _busAt > BUS_FRESH_MS)
+    requestBus();
 }
 
 // --- Main tick ---
@@ -167,7 +158,6 @@ void StateManager::update() {
     break;
 
   case MAIN_MENU:
-  case TIMER_SCREEN:
   case BUS_TIMES:
   case LIGHT_SETTINGS:
     updateInteractive(dist);
@@ -238,49 +228,13 @@ int StateManager::calculateZone(float dist, int numZones, int prevZone) {
   return zone;
 }
 
-// Opens the timer menu when the hand arrives in the base zone, closes it
-// when the hand leaves. Returns true if it changed this tick.
-bool StateManager::updateTimerMenu(float dist) {
-  bool baseActive =
-      (dist > BASE_ACTIVE_MIN_DISTANCE && dist < BASE_ACTIVE_MAX_DISTANCE);
-
-  // The hand that picked "Timer" passes through the base zone on its way
-  // out; don't treat that as a request to open the menu
-  if (!_timerMenuArmed && dist > TIMER_MENU_CLOSE_DISTANCE)
-    _timerMenuArmed = true;
-
-  if (!_timerMenuVisible && _timerMenuArmed && baseActive) {
-    _timerMenuVisible = true;
-    return true;
-  }
-  if (_timerMenuVisible && dist > TIMER_MENU_CLOSE_DISTANCE) {
-    _timerMenuVisible = false;
-    return true;
-  }
-  return false;
-}
-
 void StateManager::updateInteractive(float dist) {
   unsigned long now = millis();
 
   // Each screen is three 6cm zones that line up with the three 80px rows.
-  // firstRow skips a non-selectable top row (timer / bus info).
-  int numZones = 3;
-  int firstRow = 0;
-  switch (_currentState) {
-  case TIMER_SCREEN: {
-    bool toggled = updateTimerMenu(dist);
-    bool menuReady = _timerMenuVisible && !toggled && !_display->isAnimating();
-    numZones = menuReady ? 3 : 0;
-    firstRow = 1;
-    break;
-  }
-  case BUS_TIMES:
-    firstRow = 1;
-    break;
-  default:
-    break;
-  }
+  // firstRow skips a non-selectable top row (bus info).
+  const int numZones = 3;
+  int firstRow = (_currentState == BUS_TIMES) ? 1 : 0;
 
   int zone = calculateZone(dist, numZones, _rawZone);
   _rawZone = zone;
@@ -332,11 +286,6 @@ void StateManager::updateInteractive(float dist) {
   case MAIN_MENU:
     _display->drawMainMenu(row);
     break;
-  case TIMER_SCREEN:
-    _display->drawTimerScreen(row, _timerMenuVisible);
-    if (_timerRunning)
-      _display->drawTimerValue(now - _timerStartTime);
-    break;
   case LIGHT_SETTINGS:
     _display->drawLightSettings(row);
     break;
@@ -357,9 +306,6 @@ void StateManager::handleSelection(int row) {
   case MAIN_MENU:
     actionMainMenu(row);
     break;
-  case TIMER_SCREEN:
-    actionTimer(row);
-    break;
   case LIGHT_SETTINGS:
     actionLights(row);
     break;
@@ -375,24 +321,12 @@ void StateManager::handleSelection(int row) {
 // --- Actions ---
 
 void StateManager::actionMainMenu(int row) {
-  if (row == 0) { // Timer
-    goToState(TIMER_SCREEN);
-    _timerStartTime = millis();
-    _timerRunning = true;
-    _timerMenuVisible = false;
-    _timerMenuArmed = false;
-  } else if (row == 1) { // Bus Times
+  if (row == 0) { // Bus Times
     enterBusScreen();
-  } else if (row == 2) { // Lights
+  } else if (row == 1) { // Lights
     goToState(LIGHT_SETTINGS);
-  }
-}
-
-void StateManager::actionTimer(int row) {
-  if (row == 1) { // Reset
-    _timerStartTime = millis();
   } else if (row == 2) { // Back
-    goToState(MAIN_MENU);
+    goToStandby();
   }
 }
 

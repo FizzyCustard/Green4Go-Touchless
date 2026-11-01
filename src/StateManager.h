@@ -13,7 +13,6 @@ enum AppState {
   STANDBY,
   UNLOCK_SEQUENCE,
   MAIN_MENU,
-  TIMER_SCREEN,
   BUS_TIMES,
   LIGHT_SETTINGS,
   SHOWING_SUCCESS,
@@ -84,15 +83,10 @@ private:
   bool _busEverRequested;
   unsigned long _lastBusRequest;
 
-  // Timer State
-  unsigned long _timerStartTime;
-  bool _timerRunning;
-  bool _timerMenuVisible;
-  bool _timerMenuArmed; // Hand must leave once before the menu can open
-
   // Helpers
   static bool isInteractive(AppState s);
   void goToState(AppState s);
+  void goToStandby();
   int calculateZone(float dist, int numZones, int prevZone);
   void disarm();
   void resetStandbyTimer();
@@ -129,7 +123,6 @@ private:
 
   // Actions
   void actionMainMenu(int row);
-  void actionTimer(int row);
   void actionLights(int row);
   void actionBusTimes(int row);
 
@@ -138,7 +131,6 @@ private:
   void updateStandby(float dist);
   void updateUnlock(float dist);
   void updateInteractive(float dist);
-  bool updateTimerMenu(float dist);
 };
 
 #endif

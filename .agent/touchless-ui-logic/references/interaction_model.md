@@ -37,8 +37,8 @@ Constants: `ROW_NONE = -1`, `ROW_UNSET = -2` (disarmed, no reading yet on this s
 ## Per-tick pattern (`StateManager::updateInteractive`)
 
 ```cpp
-int numZones = 3;   // always three; 0 = nothing selectable (timer menu hidden/animating)
-int firstRow = 0;   // 1 on Timer and Bus Times (top row is info only)
+const int numZones = 3;                            // always three
+int firstRow = (_currentState == BUS_TIMES) ? 1 : 0; // top row is info only
 
 int zone = calculateZone(dist, numZones, _rawZone);
 _rawZone = zone;                                  // kept across screens
@@ -90,17 +90,6 @@ if (progress >= 1.0f)
 `disarm()` sets `_armed = false`, `_rearmRow = ROW_UNSET`, `_disarmDist = current smoothed distance`. `goToState()` calls it too, and resets `_lastZoneIdx` to `ROW_NONE` but not `_rawZone`.
 
 Arming restarts `_zoneStartTime`, so time spent on a row while disarmed never counts towards the dwell.
-
-## Timer menu (`StateManager::updateTimerMenu`)
-
-```cpp
-bool baseActive = dist > BASE_ACTIVE_MIN_DISTANCE && dist < BASE_ACTIVE_MAX_DISTANCE;
-if (!_timerMenuArmed && dist > TIMER_MENU_CLOSE_DISTANCE)
-  _timerMenuArmed = true;                     // hand must leave once first
-if (!_timerMenuVisible && _timerMenuArmed && baseActive)  -> open, return true
-if (_timerMenuVisible && dist > TIMER_MENU_CLOSE_DISTANCE) -> close, return true
-```
-On the Timer screen `numZones = (menuVisible && !toggledThisTick && !display->isAnimating()) ? 3 : 0`.
 
 ## Presence
 

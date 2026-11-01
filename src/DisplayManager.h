@@ -57,17 +57,14 @@ public:
 
   // Call every loop: runs animations (frame-capped internally)
   void update();
-  bool isAnimating() const { return _animating; }
 
   // Screens. Each one redraws fully the first time it is shown and only
   // repaints what changed after that, so they are safe to call every tick.
   void drawBootScreen();
   void drawStandbyScreen(const BusView &bus);
   void drawUnlockVisual(float progress); // 0.0 to 1.0
-  void drawMainMenu(int activeRow);      // 0=Timer, 1=Bus Times, 2=Lights
+  void drawMainMenu(int activeRow);      // 0=Bus Times, 1=Lights, 2=Back
   void drawLightSettings(int activeRow); // 0=Rainbow, 1=Coffee, 2=Back
-  void drawTimerScreen(int activeRow, bool menuOpen); // Rows 1=Reset, 2=Back
-  void drawTimerValue(unsigned long elapsedMs);
   void drawBusScreen(const BusView &bus, int activeRow); // 1=Refresh, 2=Back
   void drawSuccessScreen(const char *message);
   void drawErrorScreen(const char *message);
@@ -98,7 +95,6 @@ private:
     SCR_UNLOCK,
     SCR_MAIN,
     SCR_LIGHTS,
-    SCR_TIMER,
     SCR_BUS,
     SCR_MESSAGE,
     SCR_OTA
@@ -149,17 +145,6 @@ private:
   char _busSub[24] = "";
   uint16_t _busBg = 0;
 
-  // Timer + menu slide animation. "Openness" goes 0 (menu hidden, timer
-  // centred) to 1 (menu fully up, timer at the top).
-  char _timerStr[12] = "00:00";
-  bool _menuTarget = false;
-  float _openness = 0;
-  float _animFrom = 0;
-  bool _animating = false;
-  unsigned long _animStart = 0;
-  int _drawnTimerY = -1;
-  int _drawnMenuTop = CONTENT_H;
-
   bool enterScreen(Screen s);
   static uint16_t contrastColor(uint16_t bg);
   static uint8_t fitTextSize(size_t len, uint8_t maxSize, int maxWidth);
@@ -175,9 +160,6 @@ private:
                     int activeRow);
   void drawStandbyHint(uint16_t color);
   void drawCursorAt(int y);
-  void renderTimerFrame(float openness);
-  int timerCentreY(float openness) const;
-  int menuTop(float openness) const;
   void fillRotatedRect(int16_t x, int16_t y, int16_t w, int16_t h,
                        float angleDeg, uint16_t color);
 };

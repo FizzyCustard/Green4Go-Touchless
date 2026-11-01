@@ -9,7 +9,8 @@
 - Sensor stream: `nc green4go.local 2323` shows every raw and smoothed reading, for tuning.
 
 ### Interaction
-- The menu rows now cover 4-22cm (three 6cm rows) instead of 0-15cm, so the top row is no longer squeezed into the sensor's unreliable first few cm. Base strip is 22-32cm; the timer menu closes beyond 37cm.
+- The home menu is now Bus Times / Lights / Back. Back returns straight to the standby screen. The timer has been removed.
+- The menu rows now cover 4-22cm (three 6cm rows) instead of 0-15cm, so the top row is no longer squeezed into the sensor's unreliable first few cm. Base strip is 22-32cm.
 - One-euro filter replaces the fixed smoothing: the cursor follows a moving hand about three times faster and holds steadier when still.
 - Rows are stickier (1.25cm hysteresis), and slipping off a row and back within 250ms resumes its dwell instead of restarting it.
 

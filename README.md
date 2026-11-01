@@ -1,6 +1,6 @@
 # Green4Go
 
-A touchless kitchen-counter display for an ESP32-S3. Wave your hand above an ultrasonic sensor to drive the menus: no buttons, no touchscreen. It shows live London bus arrivals from TfL, controls a WLED light strip, runs a coffee timer, and tells you through the lights when it's time to leave for your bus.
+A touchless kitchen-counter display for an ESP32-S3. Wave your hand above an ultrasonic sensor to drive the menus: no buttons, no touchscreen. It shows live London bus arrivals from TfL, controls a WLED light strip, and tells you through the lights when it's time to leave for your bus.
 
 ## Features
 
@@ -9,7 +9,6 @@ A touchless kitchen-counter display for an ESP32-S3. Wave your hand above an ult
 - **Leave-now alert.** During your commute hours, the screen shows **LEAVE NOW** while a bus is 8 to 6 minutes away, and the WLED strip gives a short green pulse.
 - **Bus status on the coffee light.** Whenever the lights are coffee white, the first three LEDs show the next bus you can catch: red while it's far off, fading through orange to green when it's time to go, then red once it's gone. The rest stays white, and it replaces the green pulse.
 - **WLED control.** Light presets, and the strip shows bus status while you check times. Your own lighting is saved and restored around every effect.
-- **Coffee timer** that keeps the screen awake while it runs.
 - **Standby and sleep.** A passive standby screen with the next bus; the backlight fades out after 15 minutes idle and wakes when a hand comes near.
 - **OTA updates** over WiFi, with progress on screen.
 - **Self-healing.** Backs off politely when TfL or the internet is down, retries light restores, and restarts itself cleanly (only while idle) if it ever gets stuck.
@@ -65,7 +64,7 @@ This is a [PlatformIO](https://platformio.org/) project (it won't build in the A
 
 - **Wake:** hold your hand close to the sensor (under 3cm) for a second. A green ring fills to unlock.
 - **Navigate:** move your hand between about 4 and 22cm to highlight a row. Hold still and the bar along the row fills; when it's full, that row is selected. To select again, move your hand away or to another row.
-- **Timer screen:** move your hand away (over 37cm) then bring it back to the grey base zone (22-32cm) to open the Reset/Back menu.
+- **Home menu:** Bus Times, Lights and Back. Back returns straight to the standby screen.
 - **Bus Times:** the top row shows the next bus. Middle row refreshes, bottom row goes back. The lights show the bus status for 10 seconds.
 - After 30 seconds without interaction it returns to standby.
 

@@ -39,8 +39,7 @@ Each screen maps hand distance straight onto the rows, so what's under your hand
 | Screen | Rows | Notes |
 |---|---|---|
 | Standby | none | Title, next bus, the one after, status. Breathing "Hold close to wake" hint. Hold under 3cm for 1s to unlock. |
-| Main menu | Timer / Bus Times / Lights | |
-| Timer | info / Reset / Back | Timer starts on entry. The menu opens when your hand returns to the base zone after leaving (over 37cm), and closes when it leaves again. A running timer keeps the screen awake for up to an hour. |
+| Main menu | Bus Times / Lights / Back | Back returns to standby straight away. |
 | Bus Times | info / Refresh / Back | Status colour in the info row. Refreshes every 30s while open. |
 | Lights | Rainbow / Coffee / Back | Shows a confirmation, then returns to the main menu. |
 
