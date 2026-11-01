@@ -8,7 +8,7 @@ Detailed guides for each part of the firmware. Read the relevant `SKILL.md` (and
 
 | Skill | Covers |
 |---|---|
-| `.agent/touchless-ui-logic` | Sensor filtering, distance zones, dwell selection, re-arming, timer menu, unlock (`StateManager`, `DistanceSensor`) |
+| `.agent/touchless-ui-logic` | Sensor filtering, distance zones, dwell selection, re-arming, unlock (`StateManager`, `DistanceSensor`) |
 | `.agent/tft-gfx-renderer` | Drawing to the 240x320 ST7789 without flicker, screen layout, hand cursor (`DisplayManager`) |
 | `.agent/wled-json-controller` | WLED JSON API, saving/restoring the user's lighting, coffee status LEDs (`WledClient`) |
 | `.agent/tfl-api-parser` | Fetching and stream-parsing TfL bus arrivals, the network task (`BusClient`, `NetworkManager`) |

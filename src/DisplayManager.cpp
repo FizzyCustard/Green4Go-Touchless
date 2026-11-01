@@ -13,10 +13,6 @@
 #define RING_OUTER 70
 #define RING_INNER 58
 
-// Timer layout
-#define TIMER_BAND_H 60
-#define TIMER_TEXT_SIZE 5
-
 #define DWELL_BAR_H 6
 #define TEXT_MAX_W 228 // Leave a 6px margin either side
 
@@ -78,12 +74,11 @@ bool DisplayManager::enterScreen(Screen s) {
   _activeRow = -10;
   _dwellRow = -1;
   _dwellW = 0;
-  _animating = false;
 
   // Interactive screens keep a gutter on the right for the hand cursor and
   // paint their content to the left of it
-  bool gutter = (s == SCR_MAIN || s == SCR_LIGHTS || s == SCR_TIMER ||
-                 s == SCR_BUS || s == SCR_MESSAGE);
+  bool gutter = (s == SCR_MAIN || s == SCR_LIGHTS || s == SCR_BUS ||
+                 s == SCR_MESSAGE);
   if (gutter && _paintW == SCREEN_W) {
     _gfx->fillRect(SCREEN_W - GUTTER_W, 0, GUTTER_W, BASE_Y + BASE_H, C_BLACK);
     _gfx->fillRect(SCREEN_W - GUTTER_W / 2 - RAIL_W / 2, 0, RAIL_W,
@@ -204,22 +199,6 @@ void DisplayManager::update() {
   if (now - _lastFrame < FRAME_INTERVAL_MS)
     return;
   _lastFrame = now;
-
-  if (_animating && _screen == SCR_TIMER) {
-    float target = _menuTarget ? 1.0f : 0.0f;
-    // Duration scales with distance left, so a reversal mid-slide is quick
-    float dur = fabsf(target - _animFrom) * TIMER_MENU_ANIM_MS;
-    float t = dur > 0 ? (now - _animStart) / dur : 1.0f;
-    if (t >= 1.0f) {
-      t = 1.0f;
-      _animating = false;
-    }
-    float eased = 1.0f - powf(1.0f - t, 3); // easeOutCubic
-    _openness = _animFrom + (target - _animFrom) * eased;
-    renderTimerFrame(_openness);
-    if (!_animating)
-      _activeRow = -10; // Let the next draw apply the hover state
-  }
 
   // Backlight fade
   if (_blLevel != _blTarget) {
@@ -393,10 +372,9 @@ void DisplayManager::drawUnlockVisual(float progress) {
 
 void DisplayManager::drawMainMenu(int activeRow) {
   enterScreen(SCR_MAIN);
-  static const char *const labels[NUM_ROWS] = {"Timer", "Bus Times",
-                                               "Lights"};
-  static const uint16_t on[NUM_ROWS] = {C_CYBER_PINK, C_NEON_YELLOW,
-                                        C_CYBER_BLUE};
+  static const char *const labels[NUM_ROWS] = {"Bus Times", "Lights", "Back"};
+  static const uint16_t on[NUM_ROWS] = {C_NEON_YELLOW, C_CYBER_BLUE,
+                                        C_CYBER_PURPLE};
   static const uint16_t off[NUM_ROWS] = {G_1, G_2, G_3};
   drawMenuRows(labels, on, off, activeRow);
 }
@@ -492,7 +470,7 @@ void DisplayManager::drawDwellProgress(int row, float progress) {
     _dwellRow = row;
     _dwellW = 0;
   }
-  if (row < 0 || row >= NUM_ROWS || row != _activeRow || _animating)
+  if (row < 0 || row >= NUM_ROWS || row != _activeRow)
     return;
 
   if (progress < 0)
@@ -523,107 +501,6 @@ void DisplayManager::updateBaseZone(bool active) {
   } else {
     _gfx->fillRect(0, BASE_Y, _paintW, BASE_H, G_BASE_DARK);
   }
-}
-
-// --- Timer ---
-
-int DisplayManager::timerCentreY(float openness) const {
-  return 120 - (int)lroundf(80.0f * openness);
-}
-
-int DisplayManager::menuTop(float openness) const {
-  return CONTENT_H - (int)lroundf(160.0f * openness);
-}
-
-void DisplayManager::drawTimerScreen(int activeRow, bool menuOpen) {
-  if (enterScreen(SCR_TIMER)) {
-    _gfx->fillRect(0, 0, _paintW, CONTENT_H, C_BLACK);
-    strcpy(_timerStr, "00:00");
-    _openness = menuOpen ? 1.0f : 0.0f;
-    _menuTarget = menuOpen;
-    _drawnTimerY = -1;
-    _drawnMenuTop = CONTENT_H;
-    renderTimerFrame(_openness);
-  }
-
-  if (menuOpen != _menuTarget) {
-    // Start (or reverse) the slide from wherever it currently is
-    _menuTarget = menuOpen;
-    _animFrom = _openness;
-    _animStart = millis();
-    _animating = true;
-    _activeRow = -10;
-    return;
-  }
-
-  if (_animating || !_menuTarget)
-    return;
-
-  static const char *const labels[NUM_ROWS] = {nullptr, "Reset", "Back"};
-  static const uint16_t on[NUM_ROWS] = {0, C_NEON_YELLOW, C_CYBER_PURPLE};
-  static const uint16_t off[NUM_ROWS] = {0, G_1, G_2};
-  drawMenuRows(labels, on, off, activeRow);
-}
-
-// One frame of the timer/menu layout at a given openness. Clears only the
-// strips that were vacated since the last frame, then paints the new state.
-void DisplayManager::renderTimerFrame(float openness) {
-  int cy = timerCentreY(openness);
-  int top = menuTop(openness);
-  int bandTop = cy - TIMER_BAND_H / 2;
-  int bandBottom = cy + TIMER_BAND_H / 2;
-
-  // 1. Strip the menu uncovered while sliding down
-  if (top > _drawnMenuTop)
-    _gfx->fillRect(0, _drawnMenuTop, _paintW, top - _drawnMenuTop, C_BLACK);
-
-  // 2. Strip the timer uncovered while moving
-  if (_drawnTimerY >= 0 && _drawnTimerY != cy) {
-    int oldTop = _drawnTimerY - TIMER_BAND_H / 2;
-    int oldBottom = _drawnTimerY + TIMER_BAND_H / 2;
-    int clearTop, clearBottom;
-    if (cy < _drawnTimerY) {
-      clearTop = max(oldTop, bandBottom);
-      clearBottom = oldBottom;
-    } else {
-      clearTop = oldTop;
-      clearBottom = min(oldBottom, bandTop);
-    }
-    fillRectClipped(0, clearTop, _paintW, clearBottom - clearTop, C_BLACK, 0,
-                    top);
-  }
-
-  // 3. Timer, clipped so it never paints over the menu
-  drawTextInBand(_timerStr, TIMER_TEXT_SIZE, bandTop, TIMER_BAND_H, C_WHITE,
-                 C_BLACK, top);
-
-  // 4. Menu rows riding up with the slide
-  if (top < CONTENT_H) {
-    drawTextInBand("Reset", 3, top, ROW_H, contrastColor(G_1), G_1);
-    drawTextInBand("Back", 3, top + ROW_H, ROW_H, contrastColor(G_2), G_2);
-  }
-
-  _drawnTimerY = cy;
-  _drawnMenuTop = top;
-}
-
-void DisplayManager::drawTimerValue(unsigned long elapsedMs) {
-  unsigned long totalSeconds = elapsedMs / 1000;
-  char buf[sizeof(_timerStr)];
-  snprintf(buf, sizeof(buf), "%02lu:%02lu", totalSeconds / 60,
-           totalSeconds % 60);
-
-  if (strcmp(buf, _timerStr) == 0)
-    return;
-  strcpy(_timerStr, buf);
-
-  // While sliding, the next animation frame picks up the new value
-  if (_screen != SCR_TIMER || _animating)
-    return;
-
-  int cy = timerCentreY(_openness);
-  drawTextInBand(_timerStr, TIMER_TEXT_SIZE, cy - TIMER_BAND_H / 2,
-                 TIMER_BAND_H, C_WHITE, C_BLACK, menuTop(_openness));
 }
 
 // --- Hand cursor ---

@@ -47,7 +47,6 @@
 // --- Interaction ---
 #define UNLOCK_DISTANCE_CM 3
 #define STANDBY_TIMEOUT_MS 30000
-#define TIMER_AWAKE_MAX_MS 3600000UL  // A running timer keeps the screen awake for up to 1 hour
 #define BUS_UPDATE_INTERVAL_MS 60000   // Standby refresh when the last fetch worked
 #define BUS_ERROR_RETRY_MS 15000       // First retry after a failed fetch...
 #define BUS_ERROR_MAX_RETRY_MS 300000UL // ...doubling up to 5 min while it keeps failing
@@ -76,7 +75,6 @@
 #define UNLOCK_TIME_MS 1000           // Time required to unlock
 #define MAIN_LOOP_INTERVAL_MS 50      // Sensor + state machine tick (20Hz)
 #define FRAME_INTERVAL_MS 16          // Animation frame cap (~60fps)
-#define TIMER_MENU_ANIM_MS 300        // Timer menu slide duration
 #define SPLASH_MIN_MS 2000            // Splash stays up at least this long
 #define SPLASH_MAX_MS 10000           // ...and never longer than this
 #define BUS_BOOT_RETRY_MS 5000        // Splash retry interval for the first fetch
@@ -93,7 +91,6 @@
 #define ZONE_HYSTERESIS_CM 1.25         // Sticky band around menu zone edges
 #define DWELL_GRACE_MS 250              // Slip off a row and back this fast: dwell resumes
 #define REARM_DISTANCE_CM 2.0           // Movement needed to re-arm after a selection
-#define TIMER_MENU_CLOSE_DISTANCE 37.0  // Hand beyond this closes the timer menu
 #define SENSOR_FAR_CM 100.0             // Value used when no echo comes back
 #define SENSOR_ECHO_TIMEOUT_US 12000    // ~2m max range
 // One-euro filter: smooths hard while the hand is still (steady cursor

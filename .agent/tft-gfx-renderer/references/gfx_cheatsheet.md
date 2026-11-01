@@ -16,12 +16,11 @@ On interactive screens x 232-240 is the cursor gutter; content spans x 0 to `_pa
 Screen specifics:
 - **Standby:** title lines (size 2) at y 24 / 46, label y 100 (size 2), next bus y 124-184 (up to size 5), status y 186 ("then N min", "No WiFi", "TfL unavailable"), breathing "Hold close to wake" at y 272. Label turns green "LEAVE NOW" during the alert.
 - **Bus Times:** row 0 is info: main text y 0-56 (up to size 5), sub line y 56-80 (size 2); background green/orange/dark red by minutes, `G_1` when no data. Rows 1-2 Refresh / Back.
-- **Timer:** size 5 timer in a 60px band, centre y 120 (menu hidden) moving to y 40 (menu open); menu rows slide up from y 240 to y 80.
 - **Menus:** size 3 labels centred in 80px rows.
 
 ## Text
 - Built-in font: 6 x 8 px per char at size 1, scaled by size. Width = `6 * size * strlen`, height = `8 * size`.
-- Sizes in use: 2 labels/status, 3 menu items, up to 5 for bus minutes and the timer (via `fitTextSize`).
+- Sizes in use: 2 labels/status, 3 menu items, up to 5 for bus minutes (via `fitTextSize`).
 - Always draw changing text with `drawTextInBand()` (opaque fg/bg, paints around the box). Don't clear-then-print.
 - `setTextBound()` is used to clip text; restore it to the full screen afterwards (as `drawTextInBand` does).
 
@@ -34,4 +33,4 @@ Screen specifics:
 2. Compare each tick; return early if unchanged.
 3. Paint only the changed band/rect, within `_paintW`.
 4. Reset the cache inside the `if (enterScreen(SCR_X))` first-draw branch of the screen's draw function.
-5. If it moves, clear only the vacated strip (see `renderTimerFrame`, `drawCursorAt`).
+5. If it moves, clear only the vacated strip (see `drawCursorAt`).
