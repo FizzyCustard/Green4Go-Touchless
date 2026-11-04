@@ -87,7 +87,7 @@ if (progress >= 1.0f)
   handleSelection(row);   // runs the action, then disarm()
 ```
 
-`disarm()` sets `_armed = false`, `_rearmRow = ROW_UNSET`, `_disarmDist = current smoothed distance`. `goToState()` calls it too, and resets `_lastZoneIdx` to `ROW_NONE` but not `_rawZone`.
+`disarm()` sets `_armed = false`, `_rearmRow = ROW_UNSET`, `_disarmDist = current smoothed distance`. `goToState()` calls it too, and resets `_lastZoneIdx` to `ROW_NONE` but not `_rawZone`. `goToState(s, true)` (main menu -> Lights only) arms instead: `_armed = true`, `_graceRow = ROW_NONE`, so a still hand starts a fresh dwell on the new screen. `handleSelection()` only calls `disarm()` when the action left the state unchanged.
 
 Arming restarts `_zoneStartTime`, so time spent on a row while disarmed never counts towards the dwell.
 

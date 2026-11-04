@@ -31,7 +31,7 @@ Each screen maps hand distance straight onto the rows, so what's under your hand
 - **Hysteresis:** once you're on a row, you stay on it until you move `ZONE_HYSTERESIS_CM` (1.25cm) past its edge, so jitter on a boundary doesn't flicker.
 - **Dwell grace:** slip off a row and back within `DWELL_GRACE_MS` (250ms) and its bar carries on from where it was instead of starting again.
 - **Smoothing:** the distance goes through a one-euro filter, which smooths heavily while your hand is still (steady cursor during a dwell) and barely at all while it moves (the cursor keeps up).
-- **Re-arm:** after any selection or screen change, nothing can be selected until your hand leaves, or moves more than `REARM_DISTANCE_CM` (2cm) onto a different row. Without this, a still hand would select Bus Times and then immediately trigger whatever sits at the same height on the next screen.
+- **Re-arm:** after any selection or screen change, nothing can be selected until your hand leaves, or moves more than `REARM_DISTANCE_CM` (2cm) onto a different row. Without this, a still hand would select Bus Times and then immediately trigger whatever sits at the same height on the next screen. The one exception is going from the home menu into Lights: a hand held still there carries on, and starts a fresh 1s dwell on Coffee (the row at the same height). Going back, success screens and unlocking still re-arm, so a held hand can't loop Lights and Coffee or drop back to standby.
 - **Hands vs objects:** something that hasn't moved more than 1cm in 60s (a mug, the kettle) stops counting as a hand, so it can't keep the screen awake or wake it from standby.
 
 ## Screens
