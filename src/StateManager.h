@@ -85,7 +85,7 @@ private:
 
   // Helpers
   static bool isInteractive(AppState s);
-  void goToState(AppState s);
+  void goToState(AppState s, bool carryHand = false);
   void goToStandby();
   int calculateZone(float dist, int numZones, int prevZone);
   void disarm();

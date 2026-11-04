@@ -79,16 +79,23 @@ bool StateManager::isInteractive(AppState s) {
 }
 
 // Every screen change goes through here so cleanup can't be forgotten
-void StateManager::goToState(AppState s) {
+void StateManager::goToState(AppState s, bool carryHand) {
   AppState old = _currentState;
   _currentState = s;
   _stateEnteredAt = millis();
 
   // The hand is probably still where it was when it triggered this change,
-  // so it must move before anything on the new screen can be selected
+  // so it must move before anything on the new screen can be selected.
+  // carryHand (going forward into a submenu) skips that: a hand that stays
+  // put starts a fresh dwell on the row under it on the new screen.
   // _rawZone is kept: every screen shares the same zone geometry, so the
   // hysteresis that held the hand in its row should carry over too
-  disarm();
+  if (carryHand) {
+    _armed = true;
+    _graceRow = ROW_NONE; // A dwell from before can't be resumed
+  } else {
+    disarm();
+  }
   _lastZoneIdx = ROW_NONE;
   resetStandbyTimer();
 
@@ -302,6 +309,7 @@ void StateManager::updateInteractive(float dist) {
 }
 
 void StateManager::handleSelection(int row) {
+  AppState before = _currentState;
   switch (_currentState) {
   case MAIN_MENU:
     actionMainMenu(row);
@@ -315,7 +323,10 @@ void StateManager::handleSelection(int row) {
   default:
     break;
   }
-  disarm(); // One selection per visit to a row
+  // One selection per visit to a row. A screen change has already decided
+  // in goToState() whether the hand carries over, so leave that alone
+  if (_currentState == before)
+    disarm();
 }
 
 // --- Actions ---
@@ -323,8 +334,8 @@ void StateManager::handleSelection(int row) {
 void StateManager::actionMainMenu(int row) {
   if (row == 0) { // Bus Times
     enterBusScreen();
-  } else if (row == 1) { // Lights
-    goToState(LIGHT_SETTINGS);
+  } else if (row == 1) { // Lights: keep holding to go straight on to Coffee
+    goToState(LIGHT_SETTINGS, true);
   } else if (row == 2) { // Back
     goToStandby();
   }
