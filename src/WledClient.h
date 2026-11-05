@@ -13,8 +13,9 @@ public:
   WledClient();
   void begin();
 
-  void setRainbow();
-  void setCoffee();
+  // A user's pick: always tried, even in backoff. Returns whether WLED took it
+  bool setRainbow();
+  bool setCoffee();
   void setLoading();
   void updateForBusTime(int minutes);
   void setLeaveNow();

@@ -8,6 +8,9 @@
 - OTA over HTTP: `pio run -e esp32s3_http -t upload` (or one curl) sends the firmware straight to the device, so no firewall port needs opening on your computer. espota still works.
 - Sensor stream: `nc green4go.local 2323` shows every raw and smoothed reading, for tuning.
 
+### Fixes
+- Picking Coffee or Rainbow straight after a power cut now works: WLED boots slower than the display, and the pick used to be skipped for up to 30 seconds after the first failed call while the screen still said "Coffee". Picks are now always sent, and if WLED doesn't take one the screen shows "Lights offline".
+
 ### Interaction
 - Holding your hand over Lights now carries straight on: the Lights screen opens and Coffee (at the same height) starts filling, with no need to move out and back in. Back, success screens and unlocking still need a move, so a held hand can't loop.
 - The home menu is now Bus Times / Lights / Back. Back returns straight to the standby screen. The timer has been removed.

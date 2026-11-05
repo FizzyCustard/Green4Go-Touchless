@@ -106,9 +106,13 @@ static const char EFFECT_LOADING[] =
 static const char EFFECT_LEAVE_NOW[] =
     R"json({"on":true,"seg":[{"id":0,"on":true,"frz":false,"fx":2,"sx":220,"ix":128,"col":[[0,255,0]]}]})json";
 
-void WledClient::setRainbow() { sendRequest(PRESET_RAINBOW); }
+// Someone is standing there waiting for these, so they ignore backoff: WLED
+// may have come back since the last failure (it boots slower than we do)
+static bool accepted(int httpCode) { return httpCode >= 200 && httpCode < 300; }
 
-void WledClient::setCoffee() { sendRequest(PRESET_COFFEE); }
+bool WledClient::setRainbow() { return accepted(sendRequest(PRESET_RAINBOW, true)); }
+
+bool WledClient::setCoffee() { return accepted(sendRequest(PRESET_COFFEE, true)); }
 
 void WledClient::setLoading() { sendRequest(EFFECT_LOADING); }
 
