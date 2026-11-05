@@ -11,6 +11,8 @@ NetworkManager::NetworkManager(BusClient *busClient, WledClient *wledClient) {
   _busFetchPending = false;
   _coffeeStatusPending = false;
   _coffeeOn = false;
+  _lightsResultReady = false;
+  _lightsOk = false;
   _latestBusSeconds = BUS_LOADING;
   _latestSecondSeconds = -1;
   _latestBusAt = 0;
@@ -112,6 +114,15 @@ bool NetworkManager::isBusFetchPending() {
   return pending;
 }
 
+bool NetworkManager::takeLightsResult(bool &ok) {
+  portENTER_CRITICAL(&_lock);
+  bool ready = _lightsResultReady;
+  ok = _lightsOk;
+  _lightsResultReady = false;
+  portEXIT_CRITICAL(&_lock);
+  return ready;
+}
+
 bool NetworkManager::coffeeLightsOn() {
   portENTER_CRITICAL(&_lock);
   bool on = _coffeeOn;
@@ -164,12 +175,16 @@ void NetworkManager::networkTask(void *parameter) {
       }
 
       case ACT_WLED_RAINBOW:
-        self->_wledClient->setRainbow();
+      case ACT_WLED_COFFEE: {
+        bool ok = cmd.action == ACT_WLED_RAINBOW
+                      ? self->_wledClient->setRainbow()
+                      : self->_wledClient->setCoffee();
+        portENTER_CRITICAL(&self->_lock);
+        self->_lightsOk = ok;
+        self->_lightsResultReady = true;
+        portEXIT_CRITICAL(&self->_lock);
         break;
-
-      case ACT_WLED_COFFEE:
-        self->_wledClient->setCoffee();
-        break;
+      }
 
       case ACT_WLED_LOADING:
         self->_wledClient->setLoading();

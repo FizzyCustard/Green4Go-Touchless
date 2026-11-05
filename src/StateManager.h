@@ -106,6 +106,7 @@ private:
   bool startBusEffect();
   void endBusEffect();
   void takeBackLights();
+  void pollLightsResult();
 
   // Leave-now alert & display sleep
   bool inLeaveAlertHours();

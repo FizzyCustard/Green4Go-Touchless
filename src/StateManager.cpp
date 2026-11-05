@@ -140,6 +140,7 @@ void StateManager::update() {
 
   checkHealth();
   pollBusResult();
+  pollLightsResult();
 
   if (_currentState != BOOT_WARMUP) {
     maintainBusData();
@@ -521,6 +522,20 @@ void StateManager::endBusEffect() {
 void StateManager::takeBackLights() {
   _networkManager->requestWledDiscardSaved();
   _wledOwner = WLED_NONE;
+}
+
+// The success screen goes up straight away; if WLED turns out not to have
+// taken the pick (off, or still booting after a power cut), say so instead
+// of leaving the user wondering why nothing changed
+void StateManager::pollLightsResult() {
+  bool ok;
+  if (!_networkManager->takeLightsResult(ok) || ok)
+    return;
+  Serial.println("[WLED] Lights pick failed");
+  if (!isInteractive(_currentState))
+    return; // They've already walked away
+  goToState(SHOWING_API_ERROR);
+  _display->drawErrorScreen("Lights offline");
 }
 
 // --- Leave-now alert ---

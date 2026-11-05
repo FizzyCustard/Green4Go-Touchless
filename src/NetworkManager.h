@@ -59,6 +59,10 @@ public:
   // Whether the lights were coffee white at the last status check
   bool coffeeLightsOn();
 
+  // Returns true (once) when a Rainbow/Coffee pick has been sent; ok says
+  // whether WLED took it
+  bool takeLightsResult(bool &ok);
+
   // How long the current command has been running (0 when idle). Used by the
   // health check to spot a wedged task.
   unsigned long busyForMs();
@@ -77,6 +81,8 @@ private:
   bool _busFetchPending;
   bool _coffeeStatusPending;
   bool _coffeeOn;
+  bool _lightsResultReady;
+  bool _lightsOk;
   int _latestBusSeconds;
   int _latestSecondSeconds;
   unsigned long _latestBusAt;

@@ -26,7 +26,7 @@ All interaction is one number: the smoothed hand distance from `DistanceSensor::
 - **Carry-over into a submenu.** `goToState(s, true)` arms instead of disarming, so a hand that stays still starts a fresh dwell on the row under it on the new screen. Only main menu -> Lights uses it (hold over Lights and Coffee follows). `handleSelection()` only disarms when the action didn't change state, so it doesn't undo the carry. Never carry on Back, success/error returns or unlock: a held hand would loop Lights/Coffee or chain into Back to standby.
 - **All screen changes go through `goToState()`.** It disarms (unless `carryHand`), resets dwell and the standby timer, and gives back bus lights when leaving Bus Times.
 - **Base strip and cursor** (`updateBaseZone`, `setHandCursor`) are drawn after the screen, and skipped on the tick a state changes so the new screen sets up its layout first.
-- `SHOWING_SUCCESS` / `SHOWING_API_ERROR` return to the main menu after 1s / 3s.
+- `SHOWING_SUCCESS` / `SHOWING_API_ERROR` return to the main menu after 1s / 3s. A Rainbow/Coffee pick that WLED didn't take switches to `SHOWING_API_ERROR` ("Lights offline") when the result comes back.
 - Interactive screens drop to standby after `STANDBY_TIMEOUT_MS` (30s) without a present hand.
 
 ## Presence and static objects
